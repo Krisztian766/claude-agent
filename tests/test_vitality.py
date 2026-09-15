@@ -392,7 +392,9 @@ def test_growth_target_met_true_before_deadline_even_if_short(tmp_path, monkeypa
         assert vitality.growth_target_met() is True
 
 
-def test_growth_target_met_true_when_target_actually_reached(tmp_path, monkeypatch):
+def test_growth_target_met_true_when_full_target_reached(tmp_path, monkeypatch):
+    # Hitting the full aspirational multiplier is still one way to pass --
+    # it's just no longer the ONLY way (see the partial-growth test below).
     target_file = tmp_path / "growth_target.json"
     monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
     with patch("vitality.balance_wei", return_value=10**16):
@@ -401,8 +403,26 @@ def test_growth_target_met_true_when_target_actually_reached(tmp_path, monkeypat
     data["deadline"] = 0  # force deadline into the past
     target_file.write_text(json.dumps(data))
 
-    with patch("vitality.balance_wei", return_value=2 * 10**16):  # met the target
+    with patch("vitality.balance_wei", return_value=2 * 10**16):  # met the full target
         assert vitality.growth_target_met() is True
+    assert not target_file.exists()
+
+
+def test_growth_target_met_true_with_partial_growth_below_full_target(tmp_path, monkeypatch):
+    # Core behavior change (owner's request, 2026-09-15): the bar is ANY
+    # real growth above baseline, not the full 2x multiplier. A balance
+    # that grew by only 5% still passes.
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+    data = json.loads(target_file.read_text())
+    data["deadline"] = 0
+    target_file.write_text(json.dumps(data))
+
+    with patch("vitality.balance_wei", return_value=int(10**16 * 1.05)):  # short of 2x, still grew
+        assert vitality.growth_target_met() is True
+    assert not target_file.exists()
 
 
 def test_growth_target_not_met_when_deadline_passed_and_no_funds_received(tmp_path, monkeypatch):
@@ -430,12 +450,15 @@ def test_growth_target_revives_if_any_funds_received_since_baseline(tmp_path, mo
     data["deadline"] = 0
     target_file.write_text(json.dumps(data))
 
-    # Missed the FULL 2x target, but balance is above baseline -- since
+    # Missed the full 2x target, but balance is above baseline -- since
     # upkeep can only ever decrease balance, this can only mean a real
-    # transfer came in (work income or another agent's help). That counts
-    # as revival: the stale target is cleared, growth_target_met() goes
-    # back to True (no active target), and is_alive() only depends on
-    # MIN_ALIVE_WEI again.
+    # transfer came in (work income or another agent's help). This is the
+    # SAME "grew" check used for a clean on-time pass (no separate revival
+    # branch anymore): the stale target is cleared, growth_target_met()
+    # goes back to True (no active target), and is_alive() only depends on
+    # MIN_ALIVE_WEI again. Whether this call happens exactly at the
+    # deadline or later (a genuine post-mortem revival) makes no
+    # difference -- it's checked fresh every call.
     with patch("vitality.balance_wei", return_value=int(10**16 * 1.3)):
         assert vitality.growth_target_met() is True
     assert not target_file.exists()
