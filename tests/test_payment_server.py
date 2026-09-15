@@ -309,3 +309,29 @@ def test_confirm_rejects_expired_job(tmp_path, monkeypatch):
 
     resp = client.post(f"/task/{submit['job_id']}/confirm", json={"tx_hash": "0xabc"})
     assert resp.status_code == 410
+
+
+def test_prune_stale_jobs_removes_only_expired_unpaid(tmp_path, monkeypatch):
+    ps = make_env(tmp_path, monkeypatch)
+    now = time.time()
+    ps.save_jobs({
+        "stale": {"id": "stale", "status": "awaiting_payment", "created_at": now - ps.JOB_EXPIRY_SEC - 10},
+        "fresh": {"id": "fresh", "status": "awaiting_payment", "created_at": now},
+        "done_old": {"id": "done_old", "status": "done", "created_at": now - ps.JOB_EXPIRY_SEC - 10},
+    })
+
+    result = ps.prune_stale_jobs()
+
+    assert result["pruned"] == 1
+    remaining = ps.load_jobs()
+    assert set(remaining.keys()) == {"fresh", "done_old"}
+
+
+def test_prune_stale_jobs_noop_when_nothing_stale(tmp_path, monkeypatch):
+    ps = make_env(tmp_path, monkeypatch)
+    ps.save_jobs({"fresh": {"id": "fresh", "status": "awaiting_payment", "created_at": time.time()}})
+
+    result = ps.prune_stale_jobs()
+
+    assert result["pruned"] == 0
+    assert "fresh" in ps.load_jobs()

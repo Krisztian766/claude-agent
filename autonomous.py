@@ -38,6 +38,7 @@ import self_improve
 from self_improve import git
 import replicate as replicate_module
 import outreach as outreach_module
+import payment_server as payment_server_module
 import vitality
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -246,8 +247,27 @@ def maybe_draft_outreach() -> dict:
     return result
 
 
+def run_maintenance() -> dict:
+    """Cheap housekeeping, runs every tick regardless of alive/dead status --
+    it's hygiene, not productive work, so it isn't gated on vitality:
+    (1) reap replica registry entries whose process actually died (crash,
+    OOM, reboot -- replicas are plain detached processes, nothing else
+    notices), so alive_count()/the reproduction cap stay accurate; (2) prune
+    payment_jobs.json entries that were never paid and are past their own
+    expiry, since anyone can POST /task for free with no payment ever
+    required."""
+    reap_result = replicate_module.reap_dead_replicas()
+    if reap_result["reaped"]:
+        log.info("Halott replikák eltávolítva a nyilvántartásból: %s", reap_result["reaped"])
+    prune_result = payment_server_module.prune_stale_jobs()
+    if prune_result["pruned"]:
+        log.info("Ki nem fizetett, lejárt feladatok törölve: %d", prune_result["pruned"])
+    return {"reaped": reap_result["reaped"], "pruned_jobs": prune_result["pruned"]}
+
+
 def tick() -> dict:
     log.info("Autonóm ciklus indul")
+    run_maintenance()
 
     if not vitality.is_alive():
         balance = vitality.balance_wei()

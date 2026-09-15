@@ -93,6 +93,27 @@ def save_jobs(jobs: dict) -> None:
     JOBS_PATH.write_text(json.dumps(jobs, ensure_ascii=False, indent=2))
 
 
+def prune_stale_jobs() -> dict:
+    """Anyone can POST /task for free with no payment ever required -- only
+    /confirm costs anything -- so payment_jobs.json would otherwise grow
+    unbounded from jobs nobody ever paid for. Removes ones that are still
+    "awaiting_payment" past their own expiry window. Called periodically
+    from autonomous.py's tick, not on a timer of its own (this module has
+    no background loop)."""
+    with _jobs_file_lock():
+        jobs = load_jobs()
+        now = time.time()
+        stale_ids = [
+            jid for jid, j in jobs.items()
+            if j.get("status") == "awaiting_payment" and now - j.get("created_at", now) > JOB_EXPIRY_SEC
+        ]
+        for jid in stale_ids:
+            del jobs[jid]
+        if stale_ids:
+            save_jobs(jobs)
+    return {"pruned": len(stale_ids)}
+
+
 def new_job(prompt: str) -> dict:
     job = {
         "id": uuid.uuid4().hex,

@@ -16,6 +16,7 @@ Registry lives OUTSIDE any single instance's own directory
 copy calls this.
 """
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -52,6 +53,37 @@ def save_registry(registry: dict) -> None:
 
 def alive_count(registry: dict) -> int:
     return sum(1 for r in registry["replicas"] if r.get("status") == "alive")
+
+
+def is_process_alive(pid) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # process exists, just not signalable -- still alive
+    else:
+        return True
+
+
+def reap_dead_replicas() -> dict:
+    """Marks registry entries "dead" if their process actually isn't
+    running anymore (crashed, OOM-killed, box rebooted -- replicas are
+    plain detached processes, not systemd units, so nothing else notices
+    this). Without this, alive_count() stays wrong forever and the cap can
+    get stuck refusing real future reproduction for replicas that no
+    longer exist."""
+    registry = load_registry()
+    reaped = []
+    for r in registry["replicas"]:
+        if r.get("status") == "alive" and not is_process_alive(r.get("pid")):
+            r["status"] = "dead"
+            reaped.append(r["name"])
+    if reaped:
+        save_registry(registry)
+    return {"reaped": reaped}
 
 
 def this_depth() -> int:
@@ -97,6 +129,7 @@ def _start_process(dest: Path) -> int:
 
 
 def spawn_replica(name: str = None) -> dict:
+    reap_dead_replicas()
     registry = load_registry()
     depth = this_depth()
 

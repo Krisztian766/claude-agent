@@ -237,7 +237,8 @@ def test_maybe_self_improve_calls_self_improve_when_decided():
 
 
 def test_tick_skips_all_work_when_not_alive():
-    with patch("autonomous.vitality.is_alive", return_value=False), \
+    with patch("autonomous.run_maintenance", return_value={"reaped": [], "pruned_jobs": 0}), \
+         patch("autonomous.vitality.is_alive", return_value=False), \
          patch("autonomous.vitality.balance_wei", return_value=100), \
          patch("autonomous.vitality.pay_upkeep") as upkeep, \
          patch("autonomous.maybe_reproduce") as mr, \
@@ -254,7 +255,8 @@ def test_tick_skips_all_work_when_not_alive():
 
 
 def test_tick_does_all_work_when_alive():
-    with patch("autonomous.vitality.is_alive", return_value=True), \
+    with patch("autonomous.run_maintenance", return_value={"reaped": [], "pruned_jobs": 0}), \
+         patch("autonomous.vitality.is_alive", return_value=True), \
          patch("autonomous.vitality.pay_upkeep", return_value={"paid": True}) as upkeep, \
          patch("autonomous.maybe_reproduce", return_value={"reproduced": False}) as mr, \
          patch("autonomous.maybe_self_improve", return_value={"applied": False}) as mi, \
@@ -267,6 +269,25 @@ def test_tick_does_all_work_when_alive():
     mo.assert_called_once()
     assert result["alive"] is True
     assert "reproduce" in result and "self_improve" in result and "outreach" in result
+
+
+def test_tick_runs_maintenance_even_when_not_alive():
+    with patch("autonomous.run_maintenance", return_value={"reaped": [], "pruned_jobs": 0}) as maint, \
+         patch("autonomous.vitality.is_alive", return_value=False), \
+         patch("autonomous.vitality.balance_wei", return_value=100):
+        autonomous.tick()
+
+    maint.assert_called_once()
+
+
+def test_run_maintenance_calls_reap_and_prune():
+    with patch("autonomous.replicate_module.reap_dead_replicas", return_value={"reaped": ["r1"]}) as reap, \
+         patch("autonomous.payment_server_module.prune_stale_jobs", return_value={"pruned": 2}) as prune:
+        result = autonomous.run_maintenance()
+
+    reap.assert_called_once()
+    prune.assert_called_once()
+    assert result == {"reaped": ["r1"], "pruned_jobs": 2}
 
 
 def test_run_forever_exits_after_applied_self_improve_for_systemd_restart():
