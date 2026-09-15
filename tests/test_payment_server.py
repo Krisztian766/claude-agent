@@ -335,3 +335,84 @@ def test_prune_stale_jobs_noop_when_nothing_stale(tmp_path, monkeypatch):
 
     assert result["pruned"] == 0
     assert "fresh" in ps.load_jobs()
+
+
+def test_server_reachability_root_endpoint(tmp_path, monkeypatch):
+    """Verify payment server is reachable and responds to GET /"""
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+
+    resp = client.get("/")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["service"] == "claude-agent payment server"
+    assert body["chain"] == "sepolia (testnet, no real value)"
+    assert body["pay_to"] == ps.wallet["address"]
+    assert body["price_eth"] == ps.PRICE_ETH
+
+
+def test_server_reachability_activity_endpoint(tmp_path, monkeypatch):
+    """Verify /activity endpoint is reachable and returns valid stats"""
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+
+    resp = client.get("/activity")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["service"] == "claude-agent"
+    assert body["chain"] == "sepolia (testnet, no real value)"
+    assert "wallet_address" in body
+    assert "uptime_sec" in body
+    assert "jobs" in body
+    assert body["jobs"]["total_ever"] == 0
+    assert "replicas" in body
+    assert "self_improve" in body
+
+
+def test_payment_flow_complete_workflow(tmp_path, monkeypatch):
+    """End-to-end test: submit, pay, confirm, and retrieve results"""
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+
+    # 1. Submit task
+    submit_resp = client.post("/task", json={"prompt": "test query"})
+    assert submit_resp.status_code == 402
+    job_info = submit_resp.get_json()
+    job_id = job_info["job_id"]
+
+    assert "pay_to" in job_info
+    assert "amount_wei" in job_info
+    assert "amount_eth" in job_info
+    assert job_info["amount_eth"] == ps.PRICE_ETH
+
+    # 2. Verify payment details are present
+    assert job_info["chain"] == "sepolia"
+    assert job_info["confirm_url"] == f"/task/{job_id}/confirm"
+    assert job_info["status_url"] == f"/task/{job_id}"
+
+    # 3. Check status before payment (should be awaiting_payment)
+    status_resp = client.get(f"/task/{job_id}")
+    assert status_resp.status_code == 200
+    status = status_resp.get_json()
+    assert status["status"] == "awaiting_payment"
+    assert status["result"] is None
+
+    # 4. Simulate valid payment and confirm
+    fake_tx = {"to": ps.wallet["address"], "value": ps.PRICE_WEI}
+    fake_receipt = MagicMock(status=1)
+
+    with patch.object(ps.web3.eth, "get_transaction", return_value=fake_tx), \
+         patch.object(ps.web3.eth, "get_transaction_receipt", return_value=fake_receipt), \
+         patch("payment_server.invoke_claude", return_value={"result": "test answer"}):
+        confirm_resp = client.post(f"/task/{job_id}/confirm", json={"tx_hash": "0xvalid"})
+        assert confirm_resp.status_code == 202
+        ps.process_paid_job(job_id)
+
+    # 5. Retrieve final result
+    final_resp = client.get(f"/task/{job_id}")
+    assert final_resp.status_code == 200
+    final = final_resp.get_json()
+    assert final["status"] == "done"
+    assert final["result"]["result"] == "test answer"

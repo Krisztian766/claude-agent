@@ -5,6 +5,140 @@ Egyszerű, újrahasználható agent-váz, ami a `claude` CLI-t (Claude Code) has
 keresztül. Nincs API kulcs, nincs token-alapú számlázás: pontosan az az auth fut alatta,
 amivel most is dolgozunk.
 
+---
+
+## Quick Start: Using the Payment-Gated Service
+
+The Claude Agent payment server accepts tasks from anyone (no authentication required) via
+Sepolia testnet payments. **Server runs on `0.0.0.0:8402/tcp`.**
+
+### How it works
+
+1. **Submit a task** with your prompt (returns 402 Payment Required with address & amount)
+2. **Send Sepolia ETH** to the returned address
+3. **Confirm payment** with the transaction hash (server verifies on-chain, then runs the task)
+4. **Poll for results** until the task completes
+
+### Example: Using curl
+
+```bash
+# 1. Submit a task (get payment address and amount)
+curl -X POST http://localhost:8402/task \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "What is 2 + 2?"}'
+
+# Response (402):
+# {
+#   "job_id": "abc123def456...",
+#   "pay_to": "0x1234567890abcdef...",
+#   "amount_wei": "500000000000000",
+#   "amount_eth": 0.0005,
+#   "chain": "sepolia",
+#   "confirm_url": "/task/abc123def456.../confirm",
+#   "status_url": "/task/abc123def456.../",
+#   "expires_in_sec": 3600
+# }
+
+# 2. Send 0.0005 ETH to 0x1234567890abcdef... on Sepolia network
+#    (use MetaMask, Uniswap, or any Sepolia ETH sender)
+
+# 3. Confirm payment (replace tx_hash with your actual transaction hash)
+curl -X POST http://localhost:8402/task/abc123def456.../confirm \
+  -H "Content-Type: application/json" \
+  -d '{"tx_hash": "0xdeadbeef1234567890..."}'
+
+# Response (202 Accepted):
+# { "job_id": "abc123def456...", "status": "processing", ... }
+
+# 4. Poll for results (usually ready in 5-30 seconds)
+curl http://localhost:8402/task/abc123def456...
+
+# Response when done (200 OK):
+# {
+#   "job_id": "abc123def456...",
+#   "status": "done",
+#   "result": { "result": "2 + 2 = 4", "total_cost_usd": 0.001, ... }
+# }
+```
+
+### Verify payment server is running
+
+To quickly check if the payment server is reachable and accepting payments:
+
+```bash
+# Automated health check (verifies all endpoints)
+python3 check_payment_server.py
+# Expected output:
+# ✓ GET /: 200 OK
+# ✓ GET /activity: 200 OK
+# ✓ POST /task (payment required): 402 OK
+# All checks passed! Payment server is reachable and accepting payments.
+
+# Or check a remote server
+python3 check_payment_server.py --host example.com --port 8402
+```
+
+### Testing without payment (locally)
+
+If you're running the server locally and want to test without Sepolia ETH:
+```bash
+# The test suite includes full integration tests
+pytest tests/test_payment_server.py -v
+```
+
+### API Reference
+
+#### GET /
+Health check and server info
+```bash
+curl http://localhost:8402/
+# { "service": "claude-agent payment server", "chain": "sepolia", "pay_to": "0x...", "price_eth": 0.0005, ... }
+```
+
+#### GET /activity
+Public activity stats (no secrets exposed)
+```bash
+curl http://localhost:8402/activity
+# { "service": "claude-agent", "wallet_address": "0x...", "uptime_sec": 12345, 
+#   "jobs": { "total_ever": 5, "done": 3, "awaiting_payment": 2, ... }, 
+#   "replicas": { "alive": 1, "max": 3 }, ... }
+```
+
+#### POST /task
+Submit a task for payment
+```bash
+curl -X POST http://localhost:8402/task \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "your question here"}'
+# Returns 402 Payment Required with job details
+```
+
+#### POST /task/<job_id>/confirm
+Confirm payment and start processing
+```bash
+curl -X POST http://localhost:8402/task/abc123/confirm \
+  -H "Content-Type: application/json" \
+  -d '{"tx_hash": "0xdeadbeef..."}'
+# Returns 202 Accepted, task starts processing
+```
+
+#### GET /task/<job_id>
+Check task status and retrieve results
+```bash
+curl http://localhost:8402/task/abc123
+# {"job_id": "abc123", "status": "done", "result": {...}}
+# Possible statuses: awaiting_payment, verifying, processing, done, error, expired
+```
+
+### Security boundary
+
+**Hard rule:** Tasks paid by strangers run ONLY with read-only tools
+(`Read Grep Glob WebFetch WebSearch`). No Bash, Write, Edit, self-improve, or replication is
+possible through the payment API — this is enforced in code, not just policy. The request
+body has no `tools` field.
+
+---
+
 ## Hogyan működik
 
 1. Dobj egy `.task` fájlt (sima szöveg = a prompt) az `inbox/` mappába.
