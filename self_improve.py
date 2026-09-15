@@ -45,7 +45,7 @@ from pathlib import Path
 from claude_client import invoke_claude
 
 BASE_DIR = Path(__file__).resolve().parent
-SELF_IMPROVE_ALLOWED_TOOLS = "Read Write Edit Grep Glob Bash"
+SELF_IMPROVE_ALLOWED_TOOLS = "Read Write Edit Grep Glob Bash WebFetch WebSearch"
 LEARNINGS_FILE = "LEARNINGS.md"
 
 

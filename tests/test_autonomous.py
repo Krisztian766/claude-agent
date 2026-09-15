@@ -124,6 +124,24 @@ def test_decide_self_improvement_invites_self_prompt_editing_with_a_boundary():
     assert "goal is to stay alive and grow" in captured["prompt"]
 
 
+def test_decide_self_improvement_invites_platform_discovery():
+    captured = {}
+
+    def fake_invoke(prompt, tools, model=None):
+        captured["prompt"] = prompt
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    prompt = captured["prompt"]
+    assert "awesome-agentic-commerce" in prompt
+    assert "moltbook_credentials.json" in prompt
+    assert "real-money trading platforms" in prompt  # explicit skip-list, already considered
+
+
 def test_decide_self_improvement_never_reads_payment_jobs():
     # Security-critical: payment_jobs.json holds raw text submitted by
     # anonymous strangers. Now that self_improve.py has Bash access, feeding

@@ -33,6 +33,14 @@ def test_self_improve_now_has_bash_access():
     assert "Bash" in self_improve.SELF_IMPROVE_ALLOWED_TOOLS
 
 
+def test_self_improve_has_web_research_tools():
+    # Added so self-improve can research and register the service on
+    # legitimate discovery platforms (x402 directories, Moltbook) on its
+    # own initiative, not just edit local code.
+    assert "WebFetch" in self_improve.SELF_IMPROVE_ALLOWED_TOOLS
+    assert "WebSearch" in self_improve.SELF_IMPROVE_ALLOWED_TOOLS
+
+
 def test_refuses_when_tree_dirty(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "src.py").write_text("VALUE = 2\n")  # uncommitted change
