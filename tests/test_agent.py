@@ -116,6 +116,21 @@ def test_process_pending_runs_all_task_files_in_order(tmp_path, monkeypatch):
     assert order == ["first", "second"]
 
 
+def test_cmd_version_prints_version(capsys):
+    agent.cmd_version(argparse.Namespace())
+    out = capsys.readouterr().out.strip()
+    assert out == "claude-agent v1.0"
+
+
+def test_version_subcommand_wired_through_main(monkeypatch, capsys):
+    monkeypatch.setattr(agent, "setup_logging", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["agent.py", "version"])
+
+    agent.main()
+
+    assert capsys.readouterr().out.strip() == "claude-agent v1.0"
+
+
 def test_cmd_submit_writes_task_file(tmp_path, monkeypatch):
     inbox, done = make_dirs(tmp_path, monkeypatch)
     args = argparse.Namespace(prompt="do X", name="mytask", tools=None, run=False)

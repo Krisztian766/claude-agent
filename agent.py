@@ -13,6 +13,7 @@ Usage:
     agent.py status                     # show pending / recently completed tasks
     agent.py self-improve "instruction" # let the agent edit its own code (git+test gated)
     agent.py replicate [--name id]      # spawn a bounded copy of this agent
+    agent.py version                    # print the agent version
 
 Per-task tool access:
     By default a task can only use read-only/research tools (see
@@ -41,6 +42,7 @@ LOG_FILE = BASE_DIR / "agent.log"
 
 DEFAULT_ALLOWED_TOOLS = "Read Grep Glob WebFetch WebSearch"
 POLL_INTERVAL_SEC = 10
+VERSION = "1.0"
 
 log = logging.getLogger("claude-agent")
 
@@ -147,6 +149,10 @@ def cmd_self_improve(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_version(_args: argparse.Namespace) -> None:
+    print(f"claude-agent v{VERSION}")
+
+
 def cmd_replicate(args: argparse.Namespace) -> None:
     import replicate
     result = replicate.spawn_replica(name=args.name)
@@ -183,6 +189,9 @@ def main() -> None:
     p_replicate = sub.add_parser("replicate", help="Új, korlátozott számú példány indítása magáról")
     p_replicate.add_argument("--name", help="Az új példány azonosítója")
     p_replicate.set_defaults(func=cmd_replicate)
+
+    p_version = sub.add_parser("version", help="Verzió kiírása")
+    p_version.set_defaults(func=cmd_version)
 
     args = parser.parse_args()
     args.func(args)
