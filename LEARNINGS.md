@@ -8,6 +8,10 @@ starting fresh from just the last few log lines.
 Format per entry: what was found, why it mattered, what was done about it.
 Keep entries short. Newest first.
 
+## 2026-09-15: fixed "replacement transaction underpriced" by retrying with escalated gas price
+
+The previous exponential backoff only retried *waiting* for receipts, but when mempool rejects a tx as underpriced, we never sent it in the first place. Added gas-price escalation retry loop in `_send()`: on "replacement transaction underpriced" ValueError, resend with 1.5x higher gas price (up to 3 attempts). Keeps the same nonce so the higher-priced tx replaces the stuck one. Prevents payment failures mid-transaction-sequence and survives congested network periods.
+
 ## 2026-09-15: added exponential backoff retry to wait_for_transaction_receipt
 
 The payment system abandons transactions when `wait_for_transaction_receipt()` hits timeouts during temporary network congestion, losing funds. Wrapped the call with exponential backoff (1s, 2s, 4s, 8s, 16s delays across 5 attempts, 60s timeout per attempt) to tolerate transient RPC slowness. All existing behavior preserved; added comprehensive tests for backoff behavior and transaction-under-congestion recovery.

@@ -95,18 +95,48 @@ def _send(to_address: str, amount_wei: int) -> dict:
     acct = Account.from_key(wallet["private_key"])
     w3 = web3()
     nonce = w3.eth.get_transaction_count(acct.address)
-    tx = {
-        "to": Web3.to_checksum_address(to_address),
-        "value": amount_wei,
-        "nonce": nonce,
-        "gas": 21000,
-        "gasPrice": w3.eth.gas_price,
-        "chainId": 11155111,
-    }
-    signed = acct.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = _wait_for_receipt_with_backoff(tx_hash, w3)
-    return {"tx_hash": tx_hash.hex(), "status": receipt.status}
+    base_gas_price = w3.eth.gas_price
+    gas_price = base_gas_price
+    last_error = None
+
+    for attempt in range(1, 4):  # Retry up to 3 times with escalating gas price
+        try:
+            tx = {
+                "to": Web3.to_checksum_address(to_address),
+                "value": amount_wei,
+                "nonce": nonce,
+                "gas": 21000,
+                "gasPrice": gas_price,
+                "chainId": 11155111,
+            }
+            signed = acct.sign_transaction(tx)
+            tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+            receipt = _wait_for_receipt_with_backoff(tx_hash, w3)
+            if attempt > 1:
+                log.info("Transaction succeeded after %d send attempts", attempt)
+            return {"tx_hash": tx_hash.hex(), "status": receipt.status}
+        except ValueError as e:
+            error_str = str(e)
+            # Catch "replacement transaction underpriced" errors and retry with higher gas price
+            if "replacement transaction underpriced" in error_str.lower():
+                last_error = e
+                if attempt < 3:
+                    # Increase gas price by 50% each retry (1.5x, 2.25x, etc.)
+                    gas_price = int(gas_price * 1.5)
+                    log.warning("Replacement transaction underpriced on attempt %d. Retrying with gas price %d (was %d)...",
+                               attempt, gas_price, int(gas_price / 1.5))
+                    time.sleep(attempt * 0.5)  # Brief delay before retry
+                else:
+                    log.error("Transaction failed after %d attempts with gas price escalation: %s", attempt, e)
+            else:
+                # For other ValueError types, don't retry
+                raise
+        except Exception:
+            # For non-ValueError exceptions (network errors, etc.), let them propagate
+            raise
+
+    if last_error:
+        raise last_error
 
 
 def pay_upkeep() -> dict:
