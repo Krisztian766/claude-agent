@@ -7,7 +7,8 @@ Flow:
   2. Ask Claude (Read/Write/Edit/Grep/Glob only -- no Bash, so it can't do
      anything outside editing files in this directory) to make the change.
   3. Run the test suite.
-  4. Tests fail  -> `git reset --hard HEAD` (discard everything), report failure.
+  4. Tests fail  -> `git reset --hard HEAD` + `git clean -fd` (discard
+     everything, including any new untracked files), report failure.
      Tests pass  -> `git add -A && git commit`, report the new commit hash.
 
 This is deliberately owner-triggered only (CLI `agent.py self-improve`) --
@@ -60,6 +61,7 @@ def self_improve(instruction: str, cwd=None) -> dict:
     test_result = run_tests(cwd)
     if test_result.returncode != 0:
         git("reset", "--hard", "HEAD", cwd=cwd)
+        git("clean", "-fd", cwd=cwd)
         return {
             "applied": False,
             "reason": "tests failed after self-edit, changes reverted",

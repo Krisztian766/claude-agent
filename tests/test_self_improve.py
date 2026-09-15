@@ -77,3 +77,25 @@ def test_failing_tests_get_reverted(tmp_path):
     assert "reverted" in result["reason"]
     assert self_improve.working_tree_clean(cwd=repo)
     assert (repo / "src.py").read_text() == "VALUE = 1\n"
+
+
+def test_failing_tests_revert_also_cleans_untracked_files(tmp_path):
+    repo = make_repo(tmp_path)
+
+    def fake_invoke(prompt, tools, cwd=None):
+        (repo / "src.py").write_text("VALUE = 999\n")  # breaks test_value
+        (repo / "new_untracked.py").write_text("junk = 1\n")  # never added to git
+        return {"result": "broke it and left a stray file"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("break things and leave a mess", cwd=repo)
+
+    assert result["applied"] is False
+    assert "reverted" in result["reason"]
+    assert self_improve.working_tree_clean(cwd=repo)
+    assert not (repo / "new_untracked.py").exists()
+
+    # A clean tree must allow a subsequent self-improve run to proceed.
+    with patch("self_improve.invoke_claude", return_value={"result": "nothing to do"}):
+        next_result = self_improve.self_improve("do nothing", cwd=repo)
+    assert next_result["reason"] != "working tree not clean, refusing to self-improve"
