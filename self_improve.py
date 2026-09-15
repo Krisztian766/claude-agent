@@ -9,7 +9,12 @@ Flow:
   3. Run the test suite.
   4. Tests fail  -> `git reset --hard HEAD` + `git clean -fd` (discard
      everything, including any new untracked files), report failure.
-     Tests pass  -> `git add -A && git commit`, report the new commit hash.
+     Tests pass  -> `git add -A && git commit`.
+  5. Commit didn't touch LEARNINGS.md -> revert that commit too (same
+     reset+clean as a test failure) and report failure -- the prompt asking
+     Claude to log a LEARNINGS.md entry is easy to silently skip, so this
+     makes it a hard gate instead of a request. Commit did touch it ->
+     report the new commit hash.
 
 This is deliberately owner-triggered only (CLI `agent.py self-improve`, or
 the owner-configured autonomous.py orchestrator) -- nothing reachable from
@@ -41,6 +46,7 @@ from claude_client import invoke_claude
 
 BASE_DIR = Path(__file__).resolve().parent
 SELF_IMPROVE_ALLOWED_TOOLS = "Read Write Edit Grep Glob Bash"
+LEARNINGS_FILE = "LEARNINGS.md"
 
 
 def git(*args, cwd=None) -> subprocess.CompletedProcess:
@@ -50,6 +56,11 @@ def git(*args, cwd=None) -> subprocess.CompletedProcess:
 def working_tree_clean(cwd=None) -> bool:
     r = git("status", "--porcelain", cwd=cwd)
     return r.stdout.strip() == ""
+
+
+def commit_touched_learnings(commit_hash: str, cwd=None) -> bool:
+    r = git("diff", "--name-only", f"{commit_hash}~1", commit_hash, cwd=cwd)
+    return LEARNINGS_FILE in r.stdout.splitlines()
 
 
 def run_tests(cwd=None) -> subprocess.CompletedProcess:
@@ -93,10 +104,27 @@ def self_improve(instruction: str, cwd=None) -> dict:
             "claude_result": claude_result,
         }
 
+    prior_head = git("rev-parse", "HEAD", cwd=cwd).stdout.strip()
     git("add", "-A", cwd=cwd)
     commit_msg = f"self-improve: {instruction[:72]}"
     git("commit", "-m", commit_msg, cwd=cwd)
     commit_hash = git("rev-parse", "HEAD", cwd=cwd).stdout.strip()
+
+    if not commit_touched_learnings(commit_hash, cwd=cwd):
+        # The prompt asks Claude to add a LEARNINGS.md entry every cycle, but
+        # that's just a request -- it has been silently skipped before (see
+        # LEARNINGS.md itself for the incident this check was added for).
+        # Enforce it the same way test failures are enforced: revert and
+        # report failure, rather than let an undocumented change land.
+        git("reset", "--hard", prior_head, cwd=cwd)
+        git("clean", "-fd", cwd=cwd)
+        return {
+            "applied": False,
+            "reason": "LEARNINGS.md was not updated in the commit, self-improve reverted",
+            "test_output": test_result.stdout[-2000:],
+            "claude_result": claude_result,
+        }
+
     return {
         "applied": True,
         "commit": commit_hash,

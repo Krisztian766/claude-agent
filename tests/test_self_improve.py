@@ -58,6 +58,7 @@ def test_successful_self_edit_commits(tmp_path):
 
     def fake_invoke(prompt, tools, cwd=None):
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
+        (repo / "LEARNINGS.md").write_text("# Learnings\n\n- added EXTRA\n")
         return {"result": "added EXTRA"}
 
     with patch("self_improve.invoke_claude", side_effect=fake_invoke):
@@ -82,6 +83,49 @@ def test_prompt_instructs_updating_learnings_file(tmp_path):
         self_improve.self_improve("do something", cwd=repo)
 
     assert "LEARNINGS.md" in captured["prompt"]
+
+
+def test_commit_missing_learnings_update_gets_reverted(tmp_path):
+    repo = make_repo(tmp_path)
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+
+    def fake_invoke(prompt, tools, cwd=None):
+        # Makes a valid, test-passing change but never touches LEARNINGS.md.
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
+        return {"result": "added EXTRA, forgot LEARNINGS.md"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("add EXTRA constant", cwd=repo)
+
+    assert result["applied"] is False
+    assert "LEARNINGS.md" in result["reason"]
+    assert self_improve.working_tree_clean(cwd=repo)
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
+    ).stdout.strip()
+    assert head_after == head_before
+    assert (repo / "src.py").read_text() == "VALUE = 1\n"
+
+
+def test_commit_with_learnings_update_is_applied(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "LEARNINGS.md").write_text("# Learnings\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "add learnings file"], cwd=repo, check=True)
+
+    def fake_invoke(prompt, tools, cwd=None):
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
+        (repo / "LEARNINGS.md").write_text("# Learnings\n\n- did a thing\n")
+        return {"result": "added EXTRA and logged it"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("add EXTRA constant", cwd=repo)
+
+    assert result["applied"] is True
+    assert result["commit"]
+    assert self_improve.commit_touched_learnings(result["commit"], cwd=repo)
 
 
 def test_failing_tests_get_reverted(tmp_path):
