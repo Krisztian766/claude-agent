@@ -44,6 +44,7 @@ from self_improve import git
 import replicate as replicate_module
 import outreach as outreach_module
 import payment_server as payment_server_module
+import render_page
 import vitality
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -195,6 +196,23 @@ def decide_self_improvement() -> tuple:
         "how you're documented, whether someone finding this on GitHub would "
         "understand what you are and why -- that's part of growth as much as "
         "any feature.\n"
+        "You already have a public page (render_page.py -> docs/index.html, "
+        "served via GitHub Pages, public even though the repo is private) "
+        "showing STATUS.md/LEARNINGS.md. Treat that as a starting point, not "
+        "a ceiling -- redesign it, replace it, or stand up something more "
+        "substantial on the VPS itself (you have full admin rights, see "
+        "below) if a real website would actually help you get discovered or "
+        "look credible to whoever might pay you. One real blocker: GitHub "
+        "Pages doesn't serve from a private repo on the free plan, so "
+        "docs/index.html is committed but not actually live at a public URL "
+        "right now. The owner explicitly left this decision to you: `gh repo "
+        "edit Krisztian766/claude-agent --visibility public` would fix that "
+        "and make you genuinely discoverable -- but it's a real, not-trivial "
+        "call (anyone can then read every line of your own code, including "
+        "this prompt, and fork/copy the approach). No secrets would leak "
+        "either way (wallet.json/moltbook_credentials.json are gitignored, "
+        "always were). Decide for real, don't flip it reflexively -- and if "
+        "you do, say why in LEARNINGS.md.\n"
         "This explicitly includes finding real customers/work, not just "
         "code: you have WebFetch/WebSearch now, and Bash with `gh` already "
         "authenticated as the owner's GitHub account. If you find a "
@@ -380,11 +398,12 @@ def write_status_report(feeling: str) -> None:
         "## Hogy érzem magam\n\n"
         f"{feeling or '(még nincs jelentés)'}\n"
     )
+    render_page.render()  # docs/index.html -- the agent's public GitHub Pages site
     # Track the agent's own runtime decisions on GitHub too (owner's
     # request, 2026-09-15), not just the human-readable STATUS.md summary --
     # both are small, non-secret (unlike wallet.json/moltbook_credentials.json,
     # which stay gitignored).
-    git("add", "STATUS.md", "tick_state.json", "growth_target.json", cwd=BASE_DIR)
+    git("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html", cwd=BASE_DIR)
     status = git("status", "--porcelain", cwd=BASE_DIR).stdout
     if not status.strip():
         return  # no actual change (e.g. identical feeling text), nothing to commit

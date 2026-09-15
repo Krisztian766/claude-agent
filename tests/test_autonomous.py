@@ -330,6 +330,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
+         patch("autonomous.render_page.render"), \
          patch("autonomous.git", return_value=type("R", (), {"stdout": "M STATUS.md\n", "returncode": 0})()) as git_mock:
         autonomous.write_status_report("feeling pretty good today")
 
@@ -339,7 +340,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
     assert "igen" in content  # alive
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html") in calls
     assert ("commit", "-m", "status: automatic update") in calls
     assert ("push", "origin", "master") in calls
 
@@ -355,11 +356,12 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
+         patch("autonomous.render_page.render"), \
          patch("autonomous.git", return_value=type("R", (), {"stdout": "", "returncode": 0})()) as git_mock:
         autonomous.write_status_report("same as before")
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html") in calls
     assert not any(c[0] == "commit" for c in calls)
     assert not any(c[0] == "push" for c in calls)
 
