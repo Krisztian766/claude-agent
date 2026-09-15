@@ -6,21 +6,39 @@ import subprocess
 
 CLAUDE_TIMEOUT_SEC = 900
 
+# Tiered model choice (added 2026-09-15, owner's request): callers that let
+# the agent pick its own tier pass one of these keys, not a raw model name,
+# so the actual model alias can change in one place later.
+MODEL_TIERS = {"cheap": "haiku", "expensive": "sonnet"}
 
-def build_claude_cmd(prompt: str, allowed_tools: str) -> list:
-    return [
+
+def resolve_model(tier: str = None) -> str:
+    """tier is "cheap", "expensive", a raw model alias/name, or None (let
+    Claude Code use its own configured default)."""
+    if not tier:
+        return None
+    return MODEL_TIERS.get(tier, tier)
+
+
+def build_claude_cmd(prompt: str, allowed_tools: str, model: str = None) -> list:
+    cmd = [
         "claude", "-p", prompt,
         "--output-format", "json",
         "--permission-prompts", "none",
         "--allowedTools", allowed_tools,
     ]
+    resolved = resolve_model(model)
+    if resolved:
+        cmd += ["--model", resolved]
+    return cmd
 
 
-def invoke_claude(prompt: str, allowed_tools: str, cwd=None, timeout: int = CLAUDE_TIMEOUT_SEC) -> dict:
+def invoke_claude(prompt: str, allowed_tools: str, cwd=None, timeout: int = CLAUDE_TIMEOUT_SEC, model: str = None) -> dict:
     """Runs one `claude -p` call and returns a result payload dict.
     Never raises -- failures come back as {"error": ...} so callers can
-    always archive/report something."""
-    cmd = build_claude_cmd(prompt, allowed_tools)
+    always archive/report something. `model`: "cheap"/"expensive" tier, a
+    raw alias, or None for the default."""
+    cmd = build_claude_cmd(prompt, allowed_tools, model=model)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:

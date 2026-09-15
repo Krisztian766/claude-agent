@@ -70,7 +70,10 @@ def run_tests(cwd=None) -> subprocess.CompletedProcess:
     return subprocess.run([python, "-m", "pytest", "tests/", "-q"], cwd=cwd, capture_output=True, text=True)
 
 
-def self_improve(instruction: str, cwd=None) -> dict:
+def self_improve(instruction: str, cwd=None, model: str = None) -> dict:
+    """model: "cheap"/"expensive" tier (see claude_client.MODEL_TIERS), a raw
+    model alias, or None for the default. autonomous.py lets the agent pick
+    this itself each cycle as part of its own decision."""
     cwd = cwd or BASE_DIR
 
     if not working_tree_clean(cwd):
@@ -88,7 +91,7 @@ def self_improve(instruction: str, cwd=None) -> dict:
         "memory across cycles, so make it genuinely useful to your future "
         "self, not a changelog restating the commit message."
     )
-    claude_result = invoke_claude(prompt, SELF_IMPROVE_ALLOWED_TOOLS, cwd=cwd)
+    claude_result = invoke_claude(prompt, SELF_IMPROVE_ALLOWED_TOOLS, cwd=cwd, model=model)
 
     if working_tree_clean(cwd):
         return {"applied": False, "reason": "no changes made", "claude_result": claude_result}

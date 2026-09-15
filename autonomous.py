@@ -79,10 +79,14 @@ def maybe_reproduce() -> dict:
     return result
 
 
-def decide_self_improvement() -> str:
+def decide_self_improvement() -> tuple:
     """Cheap, Read-only call: does the agent see something concretely worth
-    improving about itself right now? Returns an instruction, or "" if not.
-    Complete editorial freedom on WHAT -- nothing here suggests a topic.
+    improving about itself right now? Returns (instruction, model_tier) --
+    instruction is "" if not. Complete editorial freedom on WHAT -- nothing
+    here suggests a topic. model_tier ("cheap"/"expensive") is the agent's
+    own pick for which model does the actual self-improve work, based on how
+    involved the fix looks -- this decision call itself always uses the
+    cheap tier regardless, since it's a lightweight check, not the work.
 
     Deliberately does NOT read payment_jobs.json -- that file holds raw
     prompt text submitted by anonymous strangers via payment_server.py. Now
@@ -112,36 +116,47 @@ def decide_self_improvement() -> str:
         "survive longer, but don't force that connection if there's a "
         "better find), say so. If nothing concrete stands out, that's fine "
         "too -- don't invent busywork just to have something to say.\n"
-        "Reply in EXACTLY this two-line format:\n"
+        "You also get to pick which model tier does the actual improvement "
+        "work if you decide on one -- \"cheap\" (faster, less capable) or "
+        "\"expensive\" (slower, more capable). Your call, based on how "
+        "involved the fix looks.\n"
+        "Reply in EXACTLY this three-line format:\n"
         "FEELING: <one honest, first-person sentence on how you're doing right now>\n"
-        "DECISION: <NONE, or a one-sentence instruction for the improvement>"
+        "DECISION: <NONE, or a one-sentence instruction for the improvement>\n"
+        "MODEL: <cheap or expensive -- only matters if DECISION is not NONE>"
     )
-    payload = invoke_claude(prompt, DECISION_TOOLS)
+    # This decision call itself is always the cheap tier -- it's a quick
+    # "anything concrete?" check, not the work itself.
+    payload = invoke_claude(prompt, DECISION_TOOLS, model="cheap")
     if "error" in payload:
         log.warning("Self-improve döntési hívás sikertelen: %s", payload["error"])
-        return ""
+        return "", "expensive"
     text = (payload.get("result") or "").strip()
-    feeling, decision = _parse_feeling_and_decision(text)
+    feeling, decision, model_tier = _parse_decision_reply(text)
     write_status_report(feeling)
     if not decision or decision.upper() == "NONE":
-        return ""
-    return decision
+        return "", model_tier
+    return decision, model_tier
 
 
-def _parse_feeling_and_decision(text: str) -> tuple:
-    feeling, decision = "", ""
+def _parse_decision_reply(text: str) -> tuple:
+    feeling, decision, model_tier = "", "", "expensive"
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.upper().startswith("FEELING:"):
             feeling = stripped.split(":", 1)[1].strip()
         elif stripped.upper().startswith("DECISION:"):
             decision = stripped.split(":", 1)[1].strip()
+        elif stripped.upper().startswith("MODEL:"):
+            value = stripped.split(":", 1)[1].strip().lower()
+            if value in ("cheap", "expensive"):
+                model_tier = value
     if not feeling and not decision:
         # Model didn't follow the format -- treat the whole reply as the
         # decision (old behavior) rather than silently losing it, but with
-        # no feeling text to report.
+        # no feeling text and the safe default (expensive/more capable) tier.
         decision = text.strip()
-    return feeling, decision
+    return feeling, decision, model_tier
 
 
 def self_improve_commit_count() -> int:
@@ -189,13 +204,13 @@ def write_status_report(feeling: str) -> None:
 
 
 def maybe_self_improve() -> dict:
-    instruction = decide_self_improvement()
+    instruction, model_tier = decide_self_improvement()
     if not instruction:
         log.info("Self-improve-vizsgálat: az agent nem talált konkrét javítanivalót magán")
         return {"applied": False, "reason": "agent decided nothing concrete to improve"}
 
-    log.info("Self-improve-vizsgálat: az agent ezt döntötte: %s", instruction)
-    result = self_improve.self_improve(instruction)
+    log.info("Self-improve-vizsgálat: az agent ezt döntötte (%s modell): %s", model_tier, instruction)
+    result = self_improve.self_improve(instruction, model=model_tier)
     log.info(
         "Self-improve eredménye: applied=%s reason=%s commit=%s",
         result.get("applied"), result.get("reason"), result.get("commit"),

@@ -47,3 +47,31 @@ def test_build_claude_cmd_includes_deny_by_default_prompts():
     assert cmd[cmd.index("--permission-prompts") + 1] == "none"
     assert "--allowedTools" in cmd
     assert cmd[cmd.index("--allowedTools") + 1] == "Read Write"
+
+
+def test_build_claude_cmd_omits_model_flag_by_default():
+    cmd = claude_client.build_claude_cmd("hi", "Read")
+    assert "--model" not in cmd
+
+
+def test_resolve_model_maps_tiers():
+    assert claude_client.resolve_model("cheap") == "haiku"
+    assert claude_client.resolve_model("expensive") == "sonnet"
+    assert claude_client.resolve_model(None) is None
+    assert claude_client.resolve_model("claude-opus-5") == "claude-opus-5"  # passthrough for raw aliases
+
+
+def test_build_claude_cmd_includes_resolved_model():
+    cmd = claude_client.build_claude_cmd("hi", "Read", model="cheap")
+    assert "--model" in cmd
+    assert cmd[cmd.index("--model") + 1] == "haiku"
+
+
+def test_invoke_claude_passes_model_through():
+    fake = MagicMock(returncode=0, stdout=json.dumps({"result": "ok"}), stderr="")
+    with patch("claude_client.subprocess.run", return_value=fake) as run_mock:
+        claude_client.invoke_claude("hi", "Read", model="expensive")
+
+    called_cmd = run_mock.call_args[0][0]
+    assert "--model" in called_cmd
+    assert called_cmd[called_cmd.index("--model") + 1] == "sonnet"

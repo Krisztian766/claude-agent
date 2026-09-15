@@ -194,6 +194,15 @@ Minden sikeres self-improve commit **automatikusan push-olódik** is
 (hálózat, auth), a már tesztelt/commitolt változás akkor is érvényben marad
 helyileg, csak a `pushed: false` jelzi az elmaradt szinkront.
 
+## Modellválasztás (olcsó/drága)
+
+`claude_client.py` mostantól `--model`-t is tud küldeni a `claude` CLI-nek
+(`"cheap"` → haiku, `"expensive"` → sonnet, vagy nyers alias). A self-improve
+döntéshozó hívás mindig olcsó (haiku) — ez csak egy gyors "van-e mit
+javítani?" kérdés. A tényleges javításnál viszont **az agent maga választ**
+minden ciklusban (a FEELING/DECISION válasz mellett egy MODEL sort is kér),
+aszerint, hogy mennyire bonyolultnak tűnik a talált probléma.
+
 ## Ügyfélkeresés (`outreach.py`)
 
 Az autonóm ciklus naponta legfeljebb egyszer megír egy kiajánlás-szöveget a

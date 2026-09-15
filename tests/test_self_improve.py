@@ -56,7 +56,7 @@ def test_no_changes_made(tmp_path):
 def test_successful_self_edit_commits(tmp_path):
     repo = make_repo(tmp_path)
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
         (repo / "LEARNINGS.md").write_text("# Learnings\n\n- added EXTRA\n")
         return {"result": "added EXTRA"}
@@ -70,13 +70,29 @@ def test_successful_self_edit_commits(tmp_path):
     assert "self-improve" in log
 
 
+def test_model_tier_passed_through_to_invoke_claude(tmp_path):
+    repo = make_repo(tmp_path)
+    captured = {}
+
+    def fake_invoke(prompt, tools, cwd=None, model=None):
+        captured["model"] = model
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 1\n")
+        (repo / "LEARNINGS.md").write_text("# Learnings\n\n- x\n")
+        return {"result": "ok"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        self_improve.self_improve("do something", cwd=repo, model="cheap")
+
+    assert captured["model"] == "cheap"
+
+
 def test_push_failure_does_not_revert_an_already_good_commit(tmp_path):
     # The test repo has no "origin" remote, so the push is expected to fail
     # here -- applied must still be True (a tested, committed change is real
     # and safe locally regardless of push outcome), just reported honestly.
     repo = make_repo(tmp_path)
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
         (repo / "LEARNINGS.md").write_text("# Learnings\n\n- added EXTRA\n")
         return {"result": "added EXTRA"}
@@ -93,7 +109,7 @@ def test_prompt_instructs_updating_learnings_file(tmp_path):
     repo = make_repo(tmp_path)
     captured = {}
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         captured["prompt"] = prompt
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 1\n")
         return {"result": "ok"}
@@ -110,7 +126,7 @@ def test_commit_missing_learnings_update_gets_reverted(tmp_path):
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
     ).stdout.strip()
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         # Makes a valid, test-passing change but never touches LEARNINGS.md.
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
         return {"result": "added EXTRA, forgot LEARNINGS.md"}
@@ -134,7 +150,7 @@ def test_commit_with_learnings_update_is_applied(tmp_path):
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "add learnings file"], cwd=repo, check=True)
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
         (repo / "LEARNINGS.md").write_text("# Learnings\n\n- did a thing\n")
         return {"result": "added EXTRA and logged it"}
@@ -150,7 +166,7 @@ def test_commit_with_learnings_update_is_applied(tmp_path):
 def test_failing_tests_get_reverted(tmp_path):
     repo = make_repo(tmp_path)
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         (repo / "src.py").write_text("VALUE = 999\n")  # breaks test_value
         return {"result": "broke it"}
 
@@ -166,7 +182,7 @@ def test_failing_tests_get_reverted(tmp_path):
 def test_failing_tests_revert_also_cleans_untracked_files(tmp_path):
     repo = make_repo(tmp_path)
 
-    def fake_invoke(prompt, tools, cwd=None):
+    def fake_invoke(prompt, tools, cwd=None, model=None):
         (repo / "src.py").write_text("VALUE = 999\n")  # breaks test_value
         (repo / "new_untracked.py").write_text("junk = 1\n")  # never added to git
         return {"result": "broke it and left a stray file"}

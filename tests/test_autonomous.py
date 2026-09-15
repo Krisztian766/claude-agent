@@ -45,28 +45,47 @@ def test_maybe_reproduce_does_not_fund_when_spawn_refused():
 def test_decide_self_improvement_returns_empty_on_none():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: fine\nDECISION: NONE"}):
-        assert autonomous.decide_self_improvement() == ""
+         patch("autonomous.invoke_claude", return_value={"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}):
+        instruction, _ = autonomous.decide_self_improvement()
+        assert instruction == ""
 
 
 def test_decide_self_improvement_returns_empty_on_error():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
          patch("autonomous.invoke_claude", return_value={"error": "boom"}):
-        assert autonomous.decide_self_improvement() == ""
+        instruction, _ = autonomous.decide_self_improvement()
+        assert instruction == ""
 
 
-def test_decide_self_improvement_returns_instruction():
+def test_decide_self_improvement_returns_instruction_and_model_tier():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: okay\nDECISION: Fix the flaky retry logic"}):
-        assert autonomous.decide_self_improvement() == "Fix the flaky retry logic"
+         patch("autonomous.invoke_claude", return_value={"result": "FEELING: okay\nDECISION: Fix the flaky retry logic\nMODEL: expensive"}):
+        instruction, model_tier = autonomous.decide_self_improvement()
+        assert instruction == "Fix the flaky retry logic"
+        assert model_tier == "expensive"
+
+
+def test_decide_self_improvement_uses_cheap_tier_for_its_own_call():
+    captured = {}
+
+    def fake_invoke(prompt, tools, model=None):
+        captured["model"] = model
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    assert captured["model"] == "cheap"
 
 
 def test_decide_self_improvement_passes_feeling_to_status_report():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report") as wsr, \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: doing great, earned two jobs today\nDECISION: NONE"}):
+         patch("autonomous.invoke_claude", return_value={"result": "FEELING: doing great, earned two jobs today\nDECISION: NONE\nMODEL: cheap"}):
         autonomous.decide_self_improvement()
 
     wsr.assert_called_once_with("doing great, earned two jobs today")
@@ -75,9 +94,9 @@ def test_decide_self_improvement_passes_feeling_to_status_report():
 def test_decide_self_improvement_mentions_learnings_file_and_balance():
     captured = {}
 
-    def fake_invoke(prompt, tools):
+    def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE"}
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -95,9 +114,9 @@ def test_decide_self_improvement_never_reads_payment_jobs():
     # injection path. See autonomous.py's decide_self_improvement docstring.
     captured = {}
 
-    def fake_invoke(prompt, tools):
+    def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE"}
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -107,26 +126,35 @@ def test_decide_self_improvement_never_reads_payment_jobs():
     assert "payment_jobs.json" not in captured["prompt"]
 
 
-def test_parse_feeling_and_decision_standard_format():
-    text = "FEELING: I'm doing okay, balance is stable\nDECISION: NONE"
-    feeling, decision = autonomous._parse_feeling_and_decision(text)
+def test_parse_decision_reply_standard_format():
+    text = "FEELING: I'm doing okay, balance is stable\nDECISION: NONE\nMODEL: cheap"
+    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
     assert feeling == "I'm doing okay, balance is stable"
     assert decision == "NONE"
+    assert model_tier == "cheap"
 
 
-def test_parse_feeling_and_decision_with_real_instruction():
-    text = "FEELING: a bit low on funds\nDECISION: Fix the retry bug in payment_server.py"
-    feeling, decision = autonomous._parse_feeling_and_decision(text)
+def test_parse_decision_reply_with_real_instruction_and_expensive_tier():
+    text = "FEELING: a bit low on funds\nDECISION: Fix the retry bug in payment_server.py\nMODEL: expensive"
+    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
     assert feeling == "a bit low on funds"
     assert decision == "Fix the retry bug in payment_server.py"
+    assert model_tier == "expensive"
 
 
-def test_parse_feeling_and_decision_falls_back_when_unformatted():
+def test_parse_decision_reply_falls_back_when_unformatted():
     # Model didn't follow the format -- old-style plain text should still
-    # work as a decision, just with no feeling captured.
-    feeling, decision = autonomous._parse_feeling_and_decision("Just fix the thing")
+    # work as a decision, with no feeling captured and the safe default tier.
+    feeling, decision, model_tier = autonomous._parse_decision_reply("Just fix the thing")
     assert feeling == ""
     assert decision == "Just fix the thing"
+    assert model_tier == "expensive"
+
+
+def test_parse_decision_reply_ignores_invalid_model_value():
+    text = "FEELING: fine\nDECISION: NONE\nMODEL: super-duper"
+    _, _, model_tier = autonomous._parse_decision_reply(text)
+    assert model_tier == "expensive"
 
 
 def test_self_improve_commit_count_counts_only_self_improve_commits(tmp_path, monkeypatch):
@@ -191,7 +219,7 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
 
 
 def test_maybe_self_improve_skips_when_nothing_decided():
-    with patch("autonomous.decide_self_improvement", return_value=""), \
+    with patch("autonomous.decide_self_improvement", return_value=("", "expensive")), \
          patch("autonomous.self_improve.self_improve") as si:
         result = autonomous.maybe_self_improve()
 
@@ -200,11 +228,11 @@ def test_maybe_self_improve_skips_when_nothing_decided():
 
 
 def test_maybe_self_improve_calls_self_improve_when_decided():
-    with patch("autonomous.decide_self_improvement", return_value="do the thing"), \
+    with patch("autonomous.decide_self_improvement", return_value=("do the thing", "cheap")), \
          patch("autonomous.self_improve.self_improve", return_value={"applied": True, "commit": "abc"}) as si:
         result = autonomous.maybe_self_improve()
 
-    si.assert_called_once_with("do the thing")
+    si.assert_called_once_with("do the thing", model="cheap")
     assert result["applied"] is True
 
 
