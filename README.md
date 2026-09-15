@@ -132,7 +132,7 @@ Port: **8402/tcp**, dedikáltan erre nyitva a tűzfalon (minden más továbbra i
 ## Autonóm réteg (`autonomous.py`)
 
 A fentiek (self-improve, replicate) alapból a tulajdonos parancsára futnak. Az
-`autonomous.py` teszi ezeket ténylegesen önállóvá — 30 percenként (`ORCHESTRATOR_TICK_SEC`)
+`autonomous.py` teszi ezeket ténylegesen önállóvá — 10 percenként (`ORCHESTRATOR_TICK_SEC`)
 lefut egy ciklus:
 
 - **Replikáció**: csak akkor, ha valódi, mérhető kereslet van rá — 3+ egyidejűleg

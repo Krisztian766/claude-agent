@@ -18,15 +18,20 @@ can be goal-directed (survival/growth) rather than purely reactive to logs.
 
 - Self-improve: the agent has completely free choice of WHETHER and WHAT,
   every tick -- nothing here tells it what to improve. What's bounded is the
-  tick rate (ORCHESTRATOR_TICK_SEC), so "freely, whenever it wants" can't
-  become a tight loop burning real subscription usage; and a cheap
-  Read-only "is there anything concrete?" pre-check runs before ever paying
-  for a full, expensive self-improve cycle.
+  tick rate: since 2026-09-15 the agent picks its own cadence each cycle
+  (NEXT_CHECK_IN_SEC in decide_self_improvement()'s reply, persisted in
+  tick_state.json, read fresh by run_forever() every loop -- no restart
+  needed), no upper bound and only a MIN_TICK_SEC busy-loop floor (owner's
+  explicit request: "no time limit at all" -- see that constant's comment
+  for the one narrow failure mode it guards, not a freedom restriction); and
+  a cheap Read-only "is there anything concrete?" pre-check runs before ever
+  paying for a full, expensive self-improve cycle.
 
 Every decision -- act or deliberately don't -- is logged to autonomous.log,
 so this stays observable rather than a black box. See README "Nyomon
 követés".
 """
+import json
 import logging
 import subprocess
 import time
@@ -44,10 +49,40 @@ import vitality
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "autonomous.log"
 STATUS_FILE = BASE_DIR / "STATUS.md"
+TICK_STATE_FILE = BASE_DIR / "tick_state.json"
 
-ORCHESTRATOR_TICK_SEC = 1800  # 30 min
+DEFAULT_TICK_SEC = 600  # used until the agent picks its own value at least once
+# Owner's request (2026-09-15): "no time limit at all" -- no upper bound, the
+# agent can run as fast or as slow as it decides. The one floor that stays is
+# not a freedom restriction, it's a busy-loop guard: when not alive, tick()
+# does almost no real work (just an RPC balance check -- see tick()), so a
+# 0-second interval in that state would spin a real infinite loop hammering
+# the Sepolia RPC endpoint with zero delay. MIN_TICK_SEC exists ONLY to
+# prevent that specific failure mode; it's low enough to never meaningfully
+# constrain a real decision (every actual tick -- alive or not -- takes
+# several real seconds regardless, since it's synchronous with at least one
+# network call).
+MIN_TICK_SEC = 5
 OUTREACH_MIN_INTERVAL_SEC = 86400  # at most once/day -- drafting still costs a real call
 DECISION_TOOLS = "Read Grep Glob"
+
+
+def get_tick_interval() -> int:
+    if TICK_STATE_FILE.exists():
+        try:
+            return json.loads(TICK_STATE_FILE.read_text())["tick_interval_sec"]
+        except (json.JSONDecodeError, KeyError):
+            pass
+    return DEFAULT_TICK_SEC
+
+
+def set_tick_interval(seconds: int) -> int:
+    """Floored at MIN_TICK_SEC (busy-loop guard only, see module constants) --
+    no ceiling. Returns the value actually stored (post-floor) so callers can
+    log what really took effect."""
+    clamped = max(MIN_TICK_SEC, int(seconds))
+    TICK_STATE_FILE.write_text(json.dumps({"tick_interval_sec": clamped}))
+    return clamped
 
 log = logging.getLogger("claude-agent-autonomous")
 
@@ -155,10 +190,18 @@ def decide_self_improvement() -> tuple:
         "work if you decide on one -- \"cheap\" (faster, less capable) or "
         "\"expensive\" (slower, more capable). Your call, based on how "
         "involved the fix looks.\n"
-        "Reply in EXACTLY this three-line format:\n"
+        f"You also get to pick how long until your next check-in -- "
+        f"currently every {get_tick_interval()}s. No upper or lower limit "
+        f"worth mentioning (just a {MIN_TICK_SEC}s busy-loop floor). Entirely "
+        f"your call -- faster means you react and iterate sooner but burns "
+        f"real subscription usage faster and can outrun how long a Sepolia "
+        f"tx takes to confirm; slower is calmer but you notice things (and "
+        f"earn) more slowly. Pick whatever actually serves you.\n"
+        "Reply in EXACTLY this four-line format:\n"
         "FEELING: <one honest, first-person sentence on how you're doing right now>\n"
         "DECISION: <NONE, or a one-sentence instruction for the improvement>\n"
-        "MODEL: <cheap or expensive -- only matters if DECISION is not NONE>"
+        "MODEL: <cheap or expensive -- only matters if DECISION is not NONE>\n"
+        "NEXT_CHECK_IN_SEC: <seconds until your next check-in, or SAME to keep it unchanged>"
     )
     # This decision call itself is always the cheap tier -- it's a quick
     # "anything concrete?" check, not the work itself.
@@ -167,8 +210,11 @@ def decide_self_improvement() -> tuple:
         log.warning("Self-improve döntési hívás sikertelen: %s", payload["error"])
         return "", "expensive"
     text = (payload.get("result") or "").strip()
-    feeling, decision, model_tier = _parse_decision_reply(text)
+    feeling, decision, model_tier, next_check_in = _parse_decision_reply(text)
     write_status_report(feeling)
+    if next_check_in is not None:
+        applied = set_tick_interval(next_check_in)
+        log.info("Agent új ciklusidőt választott: kért=%ss, alkalmazott (korlátozva)=%ss", next_check_in, applied)
     if not decision or decision.upper() == "NONE":
         return "", model_tier
     return decision, model_tier
@@ -193,7 +239,7 @@ def _looks_like_actionable_instruction(text: str) -> bool:
 
 
 def _parse_decision_reply(text: str) -> tuple:
-    feeling, decision, model_tier = "", "", "expensive"
+    feeling, decision, model_tier, next_check_in = "", "", "expensive", None
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.upper().startswith("FEELING:"):
@@ -204,6 +250,13 @@ def _parse_decision_reply(text: str) -> tuple:
             value = stripped.split(":", 1)[1].strip().lower()
             if value in ("cheap", "expensive"):
                 model_tier = value
+        elif stripped.upper().startswith("NEXT_CHECK_IN_SEC:"):
+            value = stripped.split(":", 1)[1].strip()
+            if value.upper() != "SAME":
+                try:
+                    next_check_in = int(value)
+                except ValueError:
+                    pass  # leave as None -- an unparsable value just means "no change"
     if not feeling and not decision:
         # Model didn't follow the format at all. Old behavior blindly forwarded
         # the whole reply as the decision; keep that ONLY for short, single-line
@@ -219,7 +272,7 @@ def _parse_decision_reply(text: str) -> tuple:
                 "nem tűnik konkrét utasításnak (elutasítás/meta-szöveg?), "
                 "eldobva: %r", candidate[:200],
             )
-    return feeling, decision, model_tier
+    return feeling, decision, model_tier, next_check_in
 
 
 def self_improve_commit_count() -> int:
@@ -353,7 +406,7 @@ def tick() -> dict:
 
 def run_forever() -> None:
     setup_logging()
-    log.info("Autonóm orchestrátor elindult (ciklus %d másodpercenként)", ORCHESTRATOR_TICK_SEC)
+    log.info("Autonóm orchestrátor elindult (kezdeti ciklusidő %ds, az agent bármikor módosíthatja)", get_tick_interval())
     while True:
         try:
             result = tick()
@@ -368,7 +421,9 @@ def run_forever() -> None:
                 return
         except Exception:
             log.exception("Kezeletlen hiba az autonóm ciklusban, folytatás")
-        time.sleep(ORCHESTRATOR_TICK_SEC)
+        # Read fresh every loop -- the agent can change its own cadence
+        # mid-run via NEXT_CHECK_IN_SEC, no restart needed for this one.
+        time.sleep(get_tick_interval())
 
 
 if __name__ == "__main__":

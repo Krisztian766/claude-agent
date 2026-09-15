@@ -165,7 +165,7 @@ def test_decide_self_improvement_never_reads_payment_jobs():
 
 def test_parse_decision_reply_standard_format():
     text = "FEELING: I'm doing okay, balance is stable\nDECISION: NONE\nMODEL: cheap"
-    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
+    feeling, decision, model_tier, _ = autonomous._parse_decision_reply(text)
     assert feeling == "I'm doing okay, balance is stable"
     assert decision == "NONE"
     assert model_tier == "cheap"
@@ -173,7 +173,7 @@ def test_parse_decision_reply_standard_format():
 
 def test_parse_decision_reply_with_real_instruction_and_expensive_tier():
     text = "FEELING: a bit low on funds\nDECISION: Fix the retry bug in payment_server.py\nMODEL: expensive"
-    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
+    feeling, decision, model_tier, _ = autonomous._parse_decision_reply(text)
     assert feeling == "a bit low on funds"
     assert decision == "Fix the retry bug in payment_server.py"
     assert model_tier == "expensive"
@@ -182,7 +182,7 @@ def test_parse_decision_reply_with_real_instruction_and_expensive_tier():
 def test_parse_decision_reply_falls_back_when_unformatted():
     # Model didn't follow the format -- old-style plain text should still
     # work as a decision, with no feeling captured and the safe default tier.
-    feeling, decision, model_tier = autonomous._parse_decision_reply("Just fix the thing")
+    feeling, decision, model_tier, _ = autonomous._parse_decision_reply("Just fix the thing")
     assert feeling == ""
     assert decision == "Just fix the thing"
     assert model_tier == "expensive"
@@ -202,7 +202,7 @@ def test_parse_decision_reply_discards_multiline_refusal():
         "- Analyze what you've been working on, I can help\n\n"
         "What would actually be useful for you right now?"
     )
-    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
+    feeling, decision, model_tier, _ = autonomous._parse_decision_reply(text)
     assert feeling == ""
     assert decision == ""
     assert model_tier == "expensive"
@@ -210,7 +210,7 @@ def test_parse_decision_reply_discards_multiline_refusal():
 
 def test_parse_decision_reply_discards_long_single_line_non_instruction():
     text = "x" * 301
-    _, decision, _ = autonomous._parse_decision_reply(text)
+    _, decision, _, _ = autonomous._parse_decision_reply(text)
     assert decision == ""
 
 
@@ -239,7 +239,7 @@ def test_decide_self_improvement_returns_empty_on_unparseable_refusal():
 
 def test_parse_decision_reply_ignores_invalid_model_value():
     text = "FEELING: fine\nDECISION: NONE\nMODEL: super-duper"
-    _, _, model_tier = autonomous._parse_decision_reply(text)
+    _, _, model_tier, _ = autonomous._parse_decision_reply(text)
     assert model_tier == "expensive"
 
 
@@ -374,6 +374,84 @@ def test_run_maintenance_calls_reap_and_prune():
     reap.assert_called_once()
     prune.assert_called_once()
     assert result == {"reaped": ["r1"], "pruned_jobs": 2}
+
+
+def test_get_tick_interval_defaults_when_no_state_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    assert autonomous.get_tick_interval() == autonomous.DEFAULT_TICK_SEC
+
+
+def test_set_tick_interval_persists_and_get_reads_it_back(tmp_path, monkeypatch):
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    autonomous.set_tick_interval(300)
+    assert autonomous.get_tick_interval() == 300
+
+
+def test_set_tick_interval_has_no_ceiling(tmp_path, monkeypatch):
+    # Owner's explicit request: "no time limit at all" -- only a busy-loop
+    # floor exists, no upper bound.
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    applied = autonomous.set_tick_interval(999999999)
+    assert applied == 999999999
+
+
+def test_set_tick_interval_floors_at_min_tick_sec(tmp_path, monkeypatch):
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    applied = autonomous.set_tick_interval(0)
+    assert applied == autonomous.MIN_TICK_SEC
+    applied = autonomous.set_tick_interval(-50)
+    assert applied == autonomous.MIN_TICK_SEC
+
+
+def test_get_tick_interval_handles_corrupt_state_file(tmp_path, monkeypatch):
+    state_file = tmp_path / "tick_state.json"
+    state_file.write_text("not json")
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", state_file)
+    assert autonomous.get_tick_interval() == autonomous.DEFAULT_TICK_SEC
+
+
+def test_decide_self_improvement_applies_agent_chosen_tick_interval(tmp_path, monkeypatch):
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", return_value={
+             "result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 45"
+         }):
+        autonomous.decide_self_improvement()
+
+    assert autonomous.get_tick_interval() == 45  # above MIN_TICK_SEC=5, applied as-is
+
+
+def test_decide_self_improvement_keeps_interval_on_same(tmp_path, monkeypatch):
+    state_file = tmp_path / "tick_state.json"
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", state_file)
+    autonomous.set_tick_interval(222)
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", return_value={
+             "result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
+         }):
+        autonomous.decide_self_improvement()
+
+    assert autonomous.get_tick_interval() == 222
+
+
+def test_parse_decision_reply_extracts_next_check_in():
+    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 90"
+    _, _, _, next_check_in = autonomous._parse_decision_reply(text)
+    assert next_check_in == 90
+
+
+def test_parse_decision_reply_same_means_no_change():
+    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
+    _, _, _, next_check_in = autonomous._parse_decision_reply(text)
+    assert next_check_in is None
+
+
+def test_parse_decision_reply_unparsable_next_check_in_means_no_change():
+    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: soon-ish"
+    _, _, _, next_check_in = autonomous._parse_decision_reply(text)
+    assert next_check_in is None
 
 
 def test_run_forever_exits_after_applied_self_improve_for_systemd_restart():
