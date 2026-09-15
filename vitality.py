@@ -10,6 +10,7 @@ Every amount here is Sepolia TESTNET ETH -- real signed transactions, zero
 real monetary value. See wallet.py / README.md.
 """
 import logging
+import time
 from pathlib import Path
 
 from eth_account import Account
@@ -51,6 +52,44 @@ def can_reproduce(cwd=None) -> bool:
     return balance_wei(cwd) >= REPRODUCE_ABOVE_WEI
 
 
+def _wait_for_receipt_with_backoff(tx_hash, w3, max_attempts=5, initial_delay=1, timeout_per_attempt=60):
+    """Wait for transaction receipt with exponential backoff retry.
+
+    Args:
+        tx_hash: Transaction hash to wait for
+        w3: Web3 instance
+        max_attempts: Maximum number of attempts (default 5)
+        initial_delay: Initial delay in seconds (default 1, grows exponentially)
+        timeout_per_attempt: Timeout for each individual wait_for_transaction_receipt call (default 60)
+
+    Returns:
+        Transaction receipt
+
+    Raises:
+        Exception: If all retry attempts fail
+    """
+    last_exception = None
+    delay = initial_delay
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=timeout_per_attempt)
+            if attempt > 1:
+                log.info("Transaction receipt received after %d attempts", attempt)
+            return receipt
+        except Exception as e:
+            last_exception = e
+            if attempt < max_attempts:
+                log.warning("Attempt %d/%d to get receipt failed: %s. Retrying in %d seconds...",
+                           attempt, max_attempts, e, delay)
+                time.sleep(delay)
+                delay *= 2  # exponential backoff
+            else:
+                log.error("All %d attempts to get transaction receipt failed: %s", max_attempts, e)
+
+    raise last_exception
+
+
 def _send(to_address: str, amount_wei: int) -> dict:
     wallet = load_or_create_wallet()
     acct = Account.from_key(wallet["private_key"])
@@ -66,7 +105,7 @@ def _send(to_address: str, amount_wei: int) -> dict:
     }
     signed = acct.sign_transaction(tx)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+    receipt = _wait_for_receipt_with_backoff(tx_hash, w3)
     return {"tx_hash": tx_hash.hex(), "status": receipt.status}
 
 

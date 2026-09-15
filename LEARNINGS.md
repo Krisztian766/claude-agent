@@ -8,6 +8,10 @@ starting fresh from just the last few log lines.
 Format per entry: what was found, why it mattered, what was done about it.
 Keep entries short. Newest first.
 
+## 2026-09-15: added exponential backoff retry to wait_for_transaction_receipt
+
+The payment system abandons transactions when `wait_for_transaction_receipt()` hits timeouts during temporary network congestion, losing funds. Wrapped the call with exponential backoff (1s, 2s, 4s, 8s, 16s delays across 5 attempts, 60s timeout per attempt) to tolerate transient RPC slowness. All existing behavior preserved; added comprehensive tests for backoff behavior and transaction-under-congestion recovery.
+
 ## 2026-09-15: a malformed decision reply got forwarded as a self-improve task verbatim
 
 `decide_self_improvement()`'s cheap pre-check sometimes replies with a
