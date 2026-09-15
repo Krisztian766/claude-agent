@@ -70,7 +70,12 @@ def self_improve(instruction: str, cwd=None) -> dict:
         f"Task: {instruction}\n"
         "Keep all existing behavior working. Add or update tests under tests/ "
         "for whatever you change. Do not touch inbox/, done/, agent.log, "
-        "venv/, wallet.json, or replica_registry.json."
+        "venv/, wallet.json, or replica_registry.json. "
+        "Also add a short entry to the TOP of LEARNINGS.md (under the header, "
+        "newest-first) describing what you found and fixed and why it "
+        "mattered -- 2-4 sentences, no fluff. This is your own persistent "
+        "memory across cycles, so make it genuinely useful to your future "
+        "self, not a changelog restating the commit message."
     )
     claude_result = invoke_claude(prompt, SELF_IMPROVE_ALLOWED_TOOLS, cwd=cwd)
 

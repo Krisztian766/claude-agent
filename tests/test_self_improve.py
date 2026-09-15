@@ -69,6 +69,21 @@ def test_successful_self_edit_commits(tmp_path):
     assert "self-improve" in log
 
 
+def test_prompt_instructs_updating_learnings_file(tmp_path):
+    repo = make_repo(tmp_path)
+    captured = {}
+
+    def fake_invoke(prompt, tools, cwd=None):
+        captured["prompt"] = prompt
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 1\n")
+        return {"result": "ok"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        self_improve.self_improve("do something", cwd=repo)
+
+    assert "LEARNINGS.md" in captured["prompt"]
+
+
 def test_failing_tests_get_reverted(tmp_path):
     repo = make_repo(tmp_path)
 

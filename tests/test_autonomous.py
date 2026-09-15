@@ -69,6 +69,19 @@ def test_decide_self_improvement_returns_instruction():
         assert autonomous.decide_self_improvement() == "Fix the flaky retry logic"
 
 
+def test_decide_self_improvement_mentions_learnings_file():
+    captured = {}
+
+    def fake_invoke(prompt, tools):
+        captured["prompt"] = prompt
+        return {"result": "NONE"}
+
+    with patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    assert "LEARNINGS.md" in captured["prompt"]
+
+
 def test_decide_self_improvement_never_reads_payment_jobs():
     # Security-critical: payment_jobs.json holds raw text submitted by
     # anonymous strangers. Now that self_improve.py has Bash access, feeding

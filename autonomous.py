@@ -96,7 +96,10 @@ def decide_self_improvement() -> str:
     execute for real. agent.log/autonomous.log are safe -- they're written
     by this agent's own code, never by echoing stranger input verbatim."""
     prompt = (
-        "You are reviewing your own recent operation. Look at agent.log and "
+        "You are reviewing your own recent operation. Look at LEARNINGS.md "
+        "first -- it's your own accumulated knowledge from past cycles, so "
+        "you don't waste effort re-discovering or re-suggesting the same "
+        "thing twice. Then look at agent.log and "
         "autonomous.log in this directory (if they exist) to see what "
         "you've actually been doing. "
         "If you see a concrete, worthwhile improvement to your own code "
