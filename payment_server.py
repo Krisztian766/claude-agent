@@ -98,14 +98,40 @@ def update_job(job_id: str, **fields) -> dict:
         return jobs[job_id]
 
 
-def verify_payment(job: dict, tx_hash: str) -> tuple:
-    """Returns (ok, reason)."""
+def reserve_tx_hash(job_id: str, tx_hash: str) -> tuple:
+    """Atomically claim tx_hash for job_id under the jobs lock, before the
+    slow on-chain verification runs. Returns (job, reason) -- job is None
+    and reason is set if the job doesn't exist, isn't awaiting payment, or
+    tx_hash is already claimed by another job.
+
+    This closes the TOCTOU window: previously the "is this tx_hash already
+    used" check, the (slow, unlocked) web3 verification, and the final
+    update_job(tx_hash=...) were three separate steps, so two concurrent
+    confirm() calls for different job_ids could both pass the uniqueness
+    check before either finished verifying, then both write the same
+    tx_hash. Writing tx_hash into the job under the lock first -- and
+    rolling back to awaiting_payment if verification later fails -- makes
+    the reservation atomic instead.
+    """
     with _jobs_lock:
         jobs = load_jobs()
+        job = jobs.get(job_id)
+        if job is None:
+            return None, "unknown job_id"
+        if job["status"] != "awaiting_payment":
+            return None, f"job is already {job['status']}"
         for other in jobs.values():
-            if other["id"] != job["id"] and other.get("tx_hash") == tx_hash:
-                return False, "tx_hash already used for another job"
+            if other["id"] != job_id and other.get("tx_hash") == tx_hash:
+                return None, "tx_hash already used for another job"
+        job["tx_hash"] = tx_hash
+        job["status"] = "verifying"
+        save_jobs(jobs)
+        return job, None
 
+
+def verify_payment(job: dict, tx_hash: str) -> tuple:
+    """Checks the tx on-chain. Returns (ok, reason). Assumes tx_hash has
+    already been atomically reserved for this job via reserve_tx_hash."""
     try:
         tx = web3.eth.get_transaction(tx_hash)
     except Exception as e:
@@ -174,11 +200,21 @@ def confirm_task(job_id):
     if not tx_hash:
         return jsonify({"error": "missing 'tx_hash'"}), 400
 
-    ok, reason = verify_payment(job, tx_hash)
-    if not ok:
+    reserved_job, reason = reserve_tx_hash(job_id, tx_hash)
+    if reserved_job is None:
+        if reason == "unknown job_id":
+            return jsonify({"error": reason}), 404
+        if reason.startswith("job is already"):
+            return jsonify({"error": reason}), 409
         return jsonify({"error": f"payment not verified: {reason}"}), 402
 
-    update_job(job_id, status="processing", tx_hash=tx_hash)
+    ok, reason = verify_payment(reserved_job, tx_hash)
+    if not ok:
+        # Roll back the reservation so the job can be retried with a valid tx.
+        update_job(job_id, status="awaiting_payment", tx_hash=None)
+        return jsonify({"error": f"payment not verified: {reason}"}), 402
+
+    update_job(job_id, status="processing")
     threading.Thread(target=process_paid_job, args=(job_id,), daemon=True).start()
     return jsonify({"job_id": job_id, "status": "processing", "status_url": f"/task/{job_id}"}), 202
 
@@ -221,7 +257,7 @@ def replica_stats() -> dict:
 
 def job_stats() -> dict:
     jobs = load_jobs().values()
-    counts = {"awaiting_payment": 0, "processing": 0, "done": 0, "error": 0, "expired": 0}
+    counts = {"awaiting_payment": 0, "verifying": 0, "processing": 0, "done": 0, "error": 0, "expired": 0}
     for j in jobs:
         counts[j.get("status", "awaiting_payment")] = counts.get(j.get("status"), 0) + 1
     counts["total_ever"] = sum(counts.values())

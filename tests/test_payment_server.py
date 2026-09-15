@@ -1,5 +1,6 @@
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -131,6 +132,90 @@ def test_confirm_rejects_reused_tx_hash(tmp_path, monkeypatch):
     assert r1.status_code == 202
     assert r2.status_code == 402
     assert "already used" in r2.get_json()["error"]
+
+
+def test_concurrent_confirm_with_same_tx_hash_pays_only_one_job(tmp_path, monkeypatch):
+    """Regression test for the TOCTOU race: two /confirm calls for
+    different jobs racing on the same tx_hash must not both be accepted,
+    even when the on-chain verification is slow. Before the fix, the
+    "already used" check and the tx_hash write were separate steps with
+    the slow web3 calls in between, so both requests could pass the check
+    before either finished verifying."""
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+    submit1 = client.post("/task", json={"prompt": "one"}).get_json()
+    submit2 = client.post("/task", json={"prompt": "two"}).get_json()
+
+    fake_tx = {"to": ps.wallet["address"], "value": ps.PRICE_WEI}
+    fake_receipt = MagicMock(status=1)
+
+    barrier = threading.Barrier(2)
+    call_count = {"n": 0}
+    count_lock = threading.Lock()
+
+    def slow_get_transaction(tx_hash):
+        with count_lock:
+            call_count["n"] += 1
+        try:
+            barrier.wait(timeout=0.2)
+        except threading.BrokenBarrierError:
+            pass
+        time.sleep(0.05)
+        return fake_tx
+
+    results = {}
+
+    def call(job_id, key):
+        results[key] = client.post(f"/task/{job_id}/confirm", json={"tx_hash": "0xrace"})
+
+    with patch.object(ps.web3.eth, "get_transaction", side_effect=slow_get_transaction), \
+         patch.object(ps.web3.eth, "get_transaction_receipt", return_value=fake_receipt), \
+         patch("payment_server.invoke_claude", return_value={"result": "ok"}):
+        t1 = threading.Thread(target=call, args=(submit1["job_id"], "a"))
+        t2 = threading.Thread(target=call, args=(submit2["job_id"], "b"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+    codes = sorted(r.status_code for r in results.values())
+    assert codes == [202, 402]
+
+    # The reservation happens before verification, so the loser must never
+    # even reach the (slow) on-chain check.
+    assert call_count["n"] == 1
+
+    jobs = ps.load_jobs()
+    claimed = [j for j in jobs.values() if j.get("tx_hash") == "0xrace"]
+    assert len(claimed) == 1
+    active = [j for j in jobs.values() if j["status"] in ("processing", "done")]
+    assert len(active) == 1
+
+
+def test_confirm_rolls_back_reservation_when_verification_fails(tmp_path, monkeypatch):
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+    submit = client.post("/task", json={"prompt": "hi"}).get_json()
+
+    bad_tx = {"to": "0x000000000000000000000000000000000000dead", "value": ps.PRICE_WEI}
+    fake_receipt = MagicMock(status=1)
+    with patch.object(ps.web3.eth, "get_transaction", return_value=bad_tx), \
+         patch.object(ps.web3.eth, "get_transaction_receipt", return_value=fake_receipt):
+        resp = client.post(f"/task/{submit['job_id']}/confirm", json={"tx_hash": "0xbad"})
+
+    assert resp.status_code == 402
+    job = ps.load_jobs()[submit["job_id"]]
+    assert job["status"] == "awaiting_payment"
+    assert job["tx_hash"] is None
+
+    # A rolled-back reservation must not block a later, valid confirm.
+    good_tx = {"to": ps.wallet["address"], "value": ps.PRICE_WEI}
+    with patch.object(ps.web3.eth, "get_transaction", return_value=good_tx), \
+         patch.object(ps.web3.eth, "get_transaction_receipt", return_value=fake_receipt), \
+         patch("payment_server.invoke_claude", return_value={"result": "ok"}):
+        resp2 = client.post(f"/task/{submit['job_id']}/confirm", json={"tx_hash": "0xgood"})
+
+    assert resp2.status_code == 202
 
 
 def test_activity_endpoint_never_exposes_raw_prompt(tmp_path, monkeypatch):
