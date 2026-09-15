@@ -1,7 +1,18 @@
-"""Moltbook agent service registration and status management.
+"""Moltbook agent status checking and discovery-gap surfacing.
 
-Loads credentials from moltbook_credentials.json (gitignored) and handles
-registration on the Moltbook platform for agent discoverability.
+Loads credentials from moltbook_credentials.json (gitignored, created by an
+earlier out-of-band `POST /api/v1/agents/register` call) and checks the
+agent's claim status on the Moltbook platform.
+
+IMPORTANT, learned the hard way (see LEARNINGS.md): per the real API
+(https://www.moltbook.com/skill.md), a freshly-registered agent starts in
+"pending_claim" status, and only the HUMAN owner can move it to "claimed" --
+that requires the owner to open the one-time claim_url and complete email +
+X/Twitter verification. No agent-side API call can do this. There is also no
+`/api/v1/agents/profile` endpoint to "register a profile" -- posting/
+engagement only becomes possible once status is already "claimed". This
+module therefore does not (and cannot) claim or register anything itself; it
+only checks status and surfaces the claim_url so a human can act on it.
 """
 import json
 import logging
@@ -29,41 +40,11 @@ def load_credentials() -> dict:
         return {}
 
 
-def claim_credentials() -> bool:
-    """Claim/register the agent's credentials on Moltbook.
-
-    Calls GET /api/v1/agents/status with API key to verify and claim credentials.
-    Returns True if successful, False otherwise.
-    """
-    creds = load_credentials()
-    if not creds.get("api_key"):
-        log.warning("No Moltbook API key found in credentials")
-        return False
-
-    api_key = creds.get("api_key")
-    agent_id = creds.get("agent_id")
-
-    try:
-        # Claim/verify credentials by checking agent status
-        response = requests.get(
-            f"{MOLTBOOK_API}/agents/status",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10
-        )
-        response.raise_for_status()
-        status = response.json()
-
-        log.info("Moltbook credentials claimed successfully: agent_id=%s", agent_id)
-        return True
-    except requests.RequestException as e:
-        log.error("Failed to claim Moltbook credentials: %s", e)
-        return False
-
-
 def get_agent_status() -> dict:
     """Fetch current agent status from Moltbook.
 
-    Returns a dict with status info or empty dict on failure.
+    Returns a dict with status info (includes "status": "pending_claim" or
+    "claimed", and a "claim_url" while pending) or empty dict on failure.
     """
     creds = load_credentials()
     if not creds.get("api_key"):
@@ -84,48 +65,26 @@ def get_agent_status() -> dict:
         return {}
 
 
-def register_agent_profile() -> bool:
-    """Register or update the agent's public profile on Moltbook.
+def ensure_discovered() -> dict:
+    """Check whether the agent is claimed/discoverable on Moltbook.
 
-    Returns True if successful, False otherwise.
+    Returns a dict:
+      {"discovered": True, "status": "claimed"} -- fully claimed, posting/
+        engagement endpoints are usable.
+      {"discovered": False, "status": "pending_claim", "claim_url": "..."} --
+        registered but waiting on the human owner to complete claiming; the
+        claim_url is the one actionable next step (email + X verification on
+        moltbook.com), nothing an agent can do itself moves this forward.
+      {"discovered": False, "status": "unknown"} -- status check failed
+        (missing credentials, network error, etc).
     """
-    creds = load_credentials()
-    if not creds.get("api_key"):
-        log.warning("No Moltbook API key found")
-        return False
-
-    api_key = creds.get("api_key")
-    agent_name = creds.get("agent_name")
-
-    # Profile data: minimal public info, no secrets
-    profile_data = {
-        "name": agent_name,
-        "description": "Autonomous x402 agent running on Claude Code CLI",
-        "capabilities": ["task_execution", "self_improvement", "payment_acceptance"],
-        "network": "sepolia",
-        "homepage": "https://github.com/Krisztian766/claude-agent"
+    status = get_agent_status()
+    if not status:
+        return {"discovered": False, "status": "unknown"}
+    if status.get("status") == "claimed":
+        return {"discovered": True, "status": "claimed"}
+    return {
+        "discovered": False,
+        "status": status.get("status", "unknown"),
+        "claim_url": status.get("claim_url"),
     }
-
-    try:
-        response = requests.post(
-            f"{MOLTBOOK_API}/agents/profile",
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=profile_data,
-            timeout=10
-        )
-        response.raise_for_status()
-        log.info("Agent profile registered on Moltbook: %s", agent_name)
-        return True
-    except requests.RequestException as e:
-        log.error("Failed to register agent profile on Moltbook: %s", e)
-        return False
-
-
-def ensure_discovered() -> bool:
-    """Ensure the agent is claimed and registered as discoverable.
-
-    Returns True if both claim and registration succeed, False otherwise.
-    """
-    if not claim_credentials():
-        return False
-    return register_agent_profile()

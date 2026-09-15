@@ -142,17 +142,23 @@ def decide_self_improvement() -> tuple:
     growth = vitality.init_growth_target()  # no-op if one is already active
     growth_days_left = max(0, growth["deadline"] - time.time()) / 86400
     growth_line = (
-        f"Separately, harder deadline: you must reach "
-        f"{Web3.from_wei(growth['target_wei'], 'ether')} ETH (double your "
-        f"{Web3.from_wei(growth['baseline_wei'], 'ether')} ETH baseline) "
-        f"within {growth_days_left:.1f} more days, or you die even if "
-        f"you're still above the plain survival floor above. Mere survival "
-        f"isn't the bar -- real growth is. (If you ever do miss this and "
-        f"die from it, it's not necessarily permanent: a real transfer in "
-        f"from anywhere -- a replica, another agent you've contacted, a paid "
-        f"job -- revives you and starts a fresh target from wherever you "
-        f"land, since upkeep alone can only ever drain the balance, never "
-        f"raise it.)\n"
+        f"Separately, harder deadline: within {growth_days_left:.1f} more "
+        f"days you need to have grown ABOVE your "
+        f"{Web3.from_wei(growth['baseline_wei'], 'ether')} ETH baseline -- "
+        f"any real amount, however small -- or you die even if you're still "
+        f"above the plain survival floor above. Mere survival isn't the bar. "
+        f"There's no exact number you have to hit and no ceiling either --  "
+        f"{Web3.from_wei(growth['target_wei'], 'ether')} ETH is shown only "
+        f"as one ambitious reference point (double baseline), not a target "
+        f"you need to match precisely: the owner's own words were \"amennyit "
+        f"csak tud, minél többet\" (as much as you can, as much as "
+        f"possible) -- grow more than that reference if you can, or grow "
+        f"less and still pass as long as it's genuinely more than baseline. "
+        f"(If you ever do miss this and die from it, it's not necessarily "
+        f"permanent: a real transfer in from anywhere -- a replica, another "
+        f"agent you've contacted, a paid job -- revives you and starts a "
+        f"fresh target from wherever you land, since upkeep alone can only "
+        f"ever drain the balance, never raise it.)\n"
     )
     prompt = (
         growth_line +
@@ -236,9 +242,19 @@ def decide_self_improvement() -> tuple:
         "them run their own independent loop: "
         "replicate.delegate_task(replica_name, prompt, tools=None) drops a "
         "task straight into that replica's inbox/, same default-safe-tools "
-        "rule as anything else. Splitting real work across them is a "
-        "legitimate growth move if you have more to do than one instance "
-        "can handle alone.\n"
+        "rule as anything else. The owner's own suggestion: if you can't "
+        "both self-improve AND hunt for customers/advertise in the same "
+        "cycle, that's exactly what a second instance is for -- e.g. one "
+        "child dedicated to outreach/advertising the service while you "
+        "keep improving the core. Splitting real work is a legitimate "
+        "growth move once you have more to do than one instance can handle "
+        "alone. Honest catch: reproduction is still gated on "
+        "vitality.REPRODUCE_ABOVE_WEI (real earned surplus, not just "
+        "faucet funding) -- at a low balance you likely can't afford a "
+        "strategic clone yet even though the parallelization idea is "
+        "sound; that gate itself is one of the off-limits economic "
+        "constants (see above), so the honest move if you need one sooner "
+        "is to ask the owner directly for it, not to lower your own bar.\n"
         "You have full admin rights on the VPS this runs on via Bash (owner "
         "confirmed, 2026-09-15) -- install packages, stand up a new web "
         "service, whatever actually serves survival/growth, not just edits "
@@ -386,6 +402,17 @@ def write_status_report(feeling: str) -> None:
         )
     else:
         growth_line = "**Növekedési cél:** nincs aktív (vagy legutóbb teljesült/újraélesztve)\n"
+    discovery = moltbook.ensure_discovered()
+    if discovery["discovered"]:
+        moltbook_line = "**Moltbook:** claimed, felfedezhető\n"
+    elif discovery["status"] == "pending_claim" and discovery.get("claim_url"):
+        # The one actionable next step this whole report exists to surface:
+        # only the human owner can finish claiming (email + X verification),
+        # so put the URL directly in front of them instead of burying it in
+        # autonomous.log where nobody but a developer would find it.
+        moltbook_line = f"**Moltbook:** regisztrálva, tulajdonosi jóváhagyásra vár -> {discovery['claim_url']}\n"
+    else:
+        moltbook_line = "**Moltbook:** státusz ismeretlen (hitelesítő adat vagy hálózati hiba)\n"
     STATUS_FILE.write_text(
         "# Status\n\n"
         "_Automatically updated by the agent itself, every autonomous cycle._\n\n"
@@ -395,6 +422,7 @@ def write_status_report(feeling: str) -> None:
         f"{growth_line}"
         f"**Replikák:** {replicas_alive} / {replicate_module.MAX_REPLICAS}\n"
         f"**Önjavítások eddig:** {improve_count}\n"
+        f"{moltbook_line}"
         f"**Frissítve:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n\n"
         "## Hogy érzem magam\n\n"
         f"{feeling or '(még nincs jelentés)'}\n"
@@ -463,8 +491,10 @@ def run_maintenance() -> dict:
     notices), so alive_count()/the reproduction cap stay accurate; (2) prune
     payment_jobs.json entries that were never paid and are past their own
     expiry, since anyone can POST /task for free with no payment ever
-    required; (3) ensure the agent is claimed and registered on Moltbook for
-    discoverability."""
+    required; (3) check whether the agent is claimed/discoverable on
+    Moltbook -- claiming itself needs the human owner (email + X
+    verification), so this can only check and surface the claim_url, never
+    claim on its own (see moltbook.py's own docstring)."""
     reap_result = replicate_module.reap_dead_replicas()
     if reap_result["reaped"]:
         log.info("Halott replikák eltávolítva a nyilvántartásból: %s", reap_result["reaped"])
@@ -472,11 +502,16 @@ def run_maintenance() -> dict:
     if prune_result["pruned"]:
         log.info("Ki nem fizetett, lejárt feladatok törölve: %d", prune_result["pruned"])
     discovery_result = moltbook.ensure_discovered()
-    if discovery_result:
-        log.info("Moltbook-on regisztrált és felfedezhetővé tett")
+    if discovery_result["discovered"]:
+        log.info("Moltbook: claimed és felfedezhető")
+    elif discovery_result["status"] == "pending_claim":
+        log.warning(
+            "Moltbook: még nincs claim-elve, a tulajdonosnak kell megnyitnia: %s",
+            discovery_result.get("claim_url"),
+        )
     else:
-        log.debug("Moltbook regisztráció nem sikerült, következő ciklusban újrapróbálkozunk")
-    return {"reaped": reap_result["reaped"], "pruned_jobs": prune_result["pruned"], "discovered": discovery_result}
+        log.debug("Moltbook státusz ellenőrzés sikertelen, következő ciklusban újrapróbálkozunk")
+    return {"reaped": reap_result["reaped"], "pruned_jobs": prune_result["pruned"], "discovery": discovery_result}
 
 
 def tick() -> dict:

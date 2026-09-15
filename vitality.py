@@ -30,7 +30,9 @@ REPRODUCE_ABOVE_WEI = Web3.to_wei(0.06, "ether")  # meaningfully above typical s
 INHERITANCE_WEI = Web3.to_wei(0.01, "ether")   # given to a new offspring's own wallet
 
 GROWTH_TARGET_DAYS = 6        # owner's request, 2026-09-15
-GROWTH_TARGET_MULTIPLIER = 2.0  # must at least double the baseline by the deadline
+GROWTH_TARGET_MULTIPLIER = 2.0  # shown as an aspirational stretch goal ("minél többet" -- as much as possible),
+# NOT the pass/fail bar -- see growth_target_status(). Owner's follow-up request, same day: don't require
+# hitting an exact multiplier to survive, just require genuine growth, however much that turns out to be.
 
 log = logging.getLogger("claude-agent-vitality")
 
@@ -51,11 +53,19 @@ def balance_wei(cwd=None) -> int:
 
 def init_growth_target(days: float = GROWTH_TARGET_DAYS, multiplier: float = GROWTH_TARGET_MULTIPLIER) -> dict:
     """One-time growth challenge (owner's request, 2026-09-15): mere
-    survival isn't enough -- if the balance hasn't at least `multiplier`x'd
-    from what it was when this was set, by `days` days later, the agent
-    dies even if it's still above MIN_ALIVE_WEI. This is a real deadline,
-    not a recurring one -- calling this again after it's already set does
-    nothing (doesn't let the deadline keep getting pushed back)."""
+    survival isn't enough -- if the balance is no higher than it was when
+    this was set, by `days` days later, the agent dies even if it's still
+    above MIN_ALIVE_WEI. This is a real deadline, not a recurring one --
+    calling this again after it's already set does nothing (doesn't let the
+    deadline keep getting pushed back).
+
+    target_wei (baseline * multiplier) is kept and shown as an aspirational
+    marker only -- "minél többet" (as much as possible), the owner's own
+    words -- not the pass/fail bar. The actual bar (see growth_target_status)
+    is just: did you grow AT ALL. A fixed multiplier as a hard cliff
+    punished any real but partial progress the same as zero progress; "grow
+    as much as you can" is a direction to keep pushing, not a specific
+    number to hit exactly or die."""
     if GROWTH_TARGET_FILE.exists():
         return json.loads(GROWTH_TARGET_FILE.read_text())
     baseline = balance_wei()
@@ -75,22 +85,29 @@ def init_growth_target(days: float = GROWTH_TARGET_DAYS, multiplier: float = GRO
 
 def growth_target_status() -> dict:
     """Returns the active target with derived fields, or None if none is
-    set. met=True whenever the deadline hasn't arrived yet OR the target is
-    already reached -- it only goes False once the deadline has actually
-    passed with the balance still short (that's the only case that should
-    ever kill something in is_alive()).
+    set (no active target == vacuously met). Before the deadline, met is
+    always True (no early kill). At/after the deadline, the bar is simply
+    "did the balance grow at all above baseline" -- not the full
+    target_wei multiplier, see init_growth_target's docstring.
 
-    Revival (owner's request, 2026-09-15): missing the deadline is not
-    necessarily permanent. Upkeep only ever DECREASES the balance -- so if
-    the balance is above the original baseline despite missing the full
-    target, that increase can only have come from a real incoming transfer
-    (paid work, or another agent -- a replica or a contact -- sending funds
-    to help it survive). That counts as genuine outside help, not a
-    technicality: the stale failed target is cleared (so is_alive() goes
-    back to just the plain MIN_ALIVE_WEI check) and a fresh target gets set
-    on the next decide_self_improvement() cycle via init_growth_target(),
-    giving it a real second chance from wherever it stands now -- not stuck
-    forever needing to reach the OLD (now much harder, relatively) target."""
+    Two things happen the moment "grew" becomes true at/after the deadline,
+    in the SAME check (this covers both a clean pass at the exact deadline
+    and a later revival after an initial miss -- same logic, checked fresh
+    every call):
+      1. Success is logged.
+      2. The file is cleared, so the next decide_self_improvement() cycle
+         sets a brand new target from the current (now higher) balance --
+         real forward momentum instead of measuring against an
+         increasingly stale baseline forever.
+
+    Revival (owner's request, 2026-09-15): if the deadline passes with NO
+    growth, the agent dies (met=False) and the target file stays as-is.
+    That is not necessarily permanent, though -- upkeep can only ever
+    DECREASE the balance, so if a later call finds the balance has risen
+    above baseline after all, that increase can only have come from a real
+    incoming transfer (paid work, or another agent -- a replica or a
+    contact -- sending funds to help it survive). The exact same "grew"
+    check above catches this automatically and revives it then."""
     if not GROWTH_TARGET_FILE.exists():
         return None
     try:
@@ -100,12 +117,21 @@ def growth_target_status() -> dict:
     now = time.time()
     current_balance = balance_wei()
     deadline_passed = now >= data["deadline"]
-    met = (not deadline_passed) or (current_balance >= data["target_wei"])
 
-    if deadline_passed and not met and current_balance > data["baseline_wei"]:
+    if not deadline_passed:
+        return {
+            **data,
+            "current_balance_wei": current_balance,
+            "seconds_remaining": data["deadline"] - now,
+            "deadline_passed": False,
+            "met": True,
+        }
+
+    grew = current_balance > data["baseline_wei"]
+    if grew:
         log.info(
-            "Növekedési cél nem teljesült, de érkezett pénz a kiindulási óta "
-            "(%s -> %s wei) -- ez valódi segítség/bevétel, újraélesztve, friss cél jön",
+            "Növekedési cél teljesült: %s -> %s wei (a determinisztikus cél csak "
+            "iránymutatás volt, minden valódi növekedés számít) -- friss cél jön",
             data["baseline_wei"], current_balance,
         )
         GROWTH_TARGET_FILE.unlink()
@@ -114,9 +140,9 @@ def growth_target_status() -> dict:
     return {
         **data,
         "current_balance_wei": current_balance,
-        "seconds_remaining": max(0, data["deadline"] - now),
-        "deadline_passed": deadline_passed,
-        "met": met,
+        "seconds_remaining": 0,
+        "deadline_passed": True,
+        "met": False,
     }
 
 

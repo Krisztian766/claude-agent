@@ -330,6 +330,9 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
+         patch("autonomous.moltbook.ensure_discovered", return_value={
+             "discovered": False, "status": "pending_claim", "claim_url": "https://www.moltbook.com/claim/abc"
+         }), \
          patch("autonomous.render_page.render"), \
          patch("autonomous.git", return_value=type("R", (), {"stdout": "M STATUS.md\n", "returncode": 0})()) as git_mock:
         autonomous.write_status_report("feeling pretty good today")
@@ -338,6 +341,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
     assert "feeling pretty good today" in content
     assert "Önjavítások eddig:** 4" in content
     assert "igen" in content  # alive
+    assert "https://www.moltbook.com/claim/abc" in content
 
     calls = [c.args for c in git_mock.call_args_list]
     assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html") in calls
@@ -356,6 +360,7 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
+         patch("autonomous.moltbook.ensure_discovered", return_value={"discovered": True, "status": "claimed"}), \
          patch("autonomous.render_page.render"), \
          patch("autonomous.git", return_value=type("R", (), {"stdout": "", "returncode": 0})()) as git_mock:
         autonomous.write_status_report("same as before")
@@ -429,15 +434,28 @@ def test_tick_runs_maintenance_even_when_not_alive():
 
 
 def test_run_maintenance_calls_reap_and_prune():
+    discovery = {"discovered": True, "status": "claimed"}
     with patch("autonomous.replicate_module.reap_dead_replicas", return_value={"reaped": ["r1"]}) as reap, \
          patch("autonomous.payment_server_module.prune_stale_jobs", return_value={"pruned": 2}) as prune, \
-         patch("autonomous.moltbook.ensure_discovered", return_value=True) as moltbook_ensure:
+         patch("autonomous.moltbook.ensure_discovered", return_value=discovery) as moltbook_ensure:
         result = autonomous.run_maintenance()
 
     reap.assert_called_once()
     prune.assert_called_once()
     moltbook_ensure.assert_called_once()
-    assert result == {"reaped": ["r1"], "pruned_jobs": 2, "discovered": True}
+    assert result == {"reaped": ["r1"], "pruned_jobs": 2, "discovery": discovery}
+
+
+def test_run_maintenance_logs_claim_url_when_pending(caplog):
+    discovery = {"discovered": False, "status": "pending_claim", "claim_url": "https://www.moltbook.com/claim/xyz"}
+    with patch("autonomous.replicate_module.reap_dead_replicas", return_value={"reaped": []}), \
+         patch("autonomous.payment_server_module.prune_stale_jobs", return_value={"pruned": 0}), \
+         patch("autonomous.moltbook.ensure_discovered", return_value=discovery), \
+         caplog.at_level("WARNING"):
+        result = autonomous.run_maintenance()
+
+    assert result["discovery"] == discovery
+    assert "https://www.moltbook.com/claim/xyz" in caplog.text
 
 
 def test_get_tick_interval_defaults_when_no_state_file(tmp_path, monkeypatch):

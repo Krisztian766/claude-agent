@@ -1,4 +1,12 @@
-"""Tests for Moltbook agent registration and credential management."""
+"""Tests for Moltbook agent status checking and discovery-gap surfacing.
+
+moltbook.py deliberately cannot "claim" or "register a profile" itself --
+per the real API (https://www.moltbook.com/skill.md), claiming requires the
+human owner to complete email + X verification via a one-time claim_url, and
+there is no agents/profile endpoint at all. These tests pin that: status
+checking works, and ensure_discovered() surfaces the claim_url instead of
+pretending success.
+"""
 import json
 import tempfile
 from pathlib import Path
@@ -68,47 +76,13 @@ class TestLoadCredentials:
             temp_path.unlink()
 
 
-class TestClaimCredentials:
-    """Test credential claiming on Moltbook platform."""
-
-    @mock.patch('moltbook.requests.get')
-    def test_claim_credentials_success(self, mock_get, temp_creds_file):
-        """Test successful credential claim."""
-        mock_response = mock.Mock()
-        mock_response.json.return_value = {"status": "claimed"}
-        mock_get.return_value = mock_response
-
-        result = moltbook.claim_credentials()
-
-        assert result is True
-        mock_get.assert_called_once()
-        call_args = mock_get.call_args
-        assert "agents/status" in call_args[0][0]
-        assert call_args[1]["headers"]["Authorization"] == "Bearer moltbook_sk_test123"
-
-    @mock.patch('moltbook.requests.get')
-    def test_claim_credentials_api_error(self, mock_get, temp_creds_file):
-        """Test credential claim with API error."""
-        mock_get.side_effect = requests.RequestException("API error")
-
-        result = moltbook.claim_credentials()
-
-        assert result is False
-
-    def test_claim_credentials_no_api_key(self, missing_creds_file):
-        """Test credential claim with no API key available."""
-        result = moltbook.claim_credentials()
-
-        assert result is False
-
-
 class TestGetAgentStatus:
     """Test fetching agent status from Moltbook."""
 
     @mock.patch('moltbook.requests.get')
     def test_get_status_success(self, mock_get, temp_creds_file):
         """Test successful status fetch."""
-        expected_status = {"agent_id": "test-agent-id-123", "alive": True}
+        expected_status = {"status": "claimed", "agent": {"id": "test-agent-id-123"}}
         mock_response = mock.Mock()
         mock_response.json.return_value = expected_status
         mock_get.return_value = mock_response
@@ -116,6 +90,9 @@ class TestGetAgentStatus:
         status = moltbook.get_agent_status()
 
         assert status == expected_status
+        call_args = mock_get.call_args
+        assert "agents/status" in call_args[0][0]
+        assert call_args[1]["headers"]["Authorization"] == "Bearer moltbook_sk_test123"
 
     @mock.patch('moltbook.requests.get')
     def test_get_status_api_error(self, mock_get, temp_creds_file):
@@ -133,77 +110,37 @@ class TestGetAgentStatus:
         assert status == {}
 
 
-class TestRegisterProfile:
-    """Test agent profile registration on Moltbook."""
-
-    @mock.patch('moltbook.requests.post')
-    def test_register_profile_success(self, mock_post, temp_creds_file):
-        """Test successful profile registration."""
-        mock_response = mock.Mock()
-        mock_response.json.return_value = {"registered": True}
-        mock_post.return_value = mock_response
-
-        result = moltbook.register_agent_profile()
-
-        assert result is True
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        assert "agents/profile" in call_args[0][0]
-        assert call_args[1]["headers"]["Authorization"] == "Bearer moltbook_sk_test123"
-        profile_data = call_args[1]["json"]
-        assert profile_data["name"] == "test-agent"
-        assert "capabilities" in profile_data
-
-    @mock.patch('moltbook.requests.post')
-    def test_register_profile_api_error(self, mock_post, temp_creds_file):
-        """Test profile registration with API error."""
-        mock_post.side_effect = requests.RequestException("API error")
-
-        result = moltbook.register_agent_profile()
-
-        assert result is False
-
-    def test_register_profile_no_api_key(self, missing_creds_file):
-        """Test profile registration with no API key."""
-        result = moltbook.register_agent_profile()
-
-        assert result is False
-
-
 class TestEnsureDiscovered:
-    """Test complete discovery flow."""
+    """Test the discovery-status check (never claims/registers on its own --
+    that needs the human owner, see moltbook.py's module docstring)."""
 
-    @mock.patch('moltbook.register_agent_profile')
-    @mock.patch('moltbook.claim_credentials')
-    def test_ensure_discovered_success(self, mock_claim, mock_register):
-        """Test successful complete discovery."""
-        mock_claim.return_value = True
-        mock_register.return_value = True
+    @mock.patch('moltbook.get_agent_status')
+    def test_claimed_agent_is_discovered(self, mock_status):
+        mock_status.return_value = {"status": "claimed"}
 
         result = moltbook.ensure_discovered()
 
-        assert result is True
-        mock_claim.assert_called_once()
-        mock_register.assert_called_once()
+        assert result == {"discovered": True, "status": "claimed"}
 
-    @mock.patch('moltbook.register_agent_profile')
-    @mock.patch('moltbook.claim_credentials')
-    def test_ensure_discovered_claim_fails(self, mock_claim, mock_register):
-        """Test discovery when claim fails."""
-        mock_claim.return_value = False
-
-        result = moltbook.ensure_discovered()
-
-        assert result is False
-        mock_register.assert_not_called()
-
-    @mock.patch('moltbook.register_agent_profile')
-    @mock.patch('moltbook.claim_credentials')
-    def test_ensure_discovered_register_fails(self, mock_claim, mock_register):
-        """Test discovery when registration fails."""
-        mock_claim.return_value = True
-        mock_register.return_value = False
+    @mock.patch('moltbook.get_agent_status')
+    def test_pending_claim_surfaces_claim_url(self, mock_status):
+        mock_status.return_value = {
+            "status": "pending_claim",
+            "claim_url": "https://www.moltbook.com/claim/abc123",
+        }
 
         result = moltbook.ensure_discovered()
 
-        assert result is False
+        assert result == {
+            "discovered": False,
+            "status": "pending_claim",
+            "claim_url": "https://www.moltbook.com/claim/abc123",
+        }
+
+    @mock.patch('moltbook.get_agent_status')
+    def test_failed_status_check_reports_unknown(self, mock_status):
+        mock_status.return_value = {}
+
+        result = moltbook.ensure_discovered()
+
+        assert result == {"discovered": False, "status": "unknown"}
