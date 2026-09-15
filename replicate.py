@@ -27,7 +27,7 @@ MAX_DEPTH = 2           # a replica of a replica of a replica is refused
 # Copied into each replica; venv/ included so it works standalone without
 # re-installing deps. Runtime/instance-specific state is never copied.
 EXCLUDE = {".git", "inbox", "done", "agent.log", "__pycache__", ".pytest_cache",
-           "claude-agent-replicas", "wallet.json"}
+           "claude-agent-replicas", "wallet.json", "payment_jobs.json"}
 
 
 def load_registry() -> dict:

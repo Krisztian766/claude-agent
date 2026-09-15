@@ -33,6 +33,18 @@ def test_first_replica_succeeds(tmp_path, monkeypatch):
     assert registry["replicas"][0]["status"] == "alive"
 
 
+def test_runtime_state_not_copied(tmp_path, monkeypatch):
+    base, replicas_dir, _ = setup(tmp_path, monkeypatch)
+    (base / "wallet.json").write_text("{}")
+    (base / "payment_jobs.json").write_text("[]")
+
+    result = replicate.spawn_replica(name="r1")
+
+    assert result["spawned"] is True
+    assert not (replicas_dir / "r1" / "wallet.json").exists()
+    assert not (replicas_dir / "r1" / "payment_jobs.json").exists()
+
+
 def test_duplicate_name_refused(tmp_path, monkeypatch):
     setup(tmp_path, monkeypatch)
     replicate.spawn_replica(name="dup")
