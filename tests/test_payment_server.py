@@ -133,6 +133,38 @@ def test_confirm_rejects_reused_tx_hash(tmp_path, monkeypatch):
     assert "already used" in r2.get_json()["error"]
 
 
+def test_activity_endpoint_never_exposes_raw_prompt(tmp_path, monkeypatch):
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+    secret_prompt = "SECRET_PAYLOAD_SHOULD_NOT_LEAK"
+    client.post("/task", json={"prompt": secret_prompt})
+
+    resp = client.get("/activity")
+    body = resp.get_json()
+
+    assert resp.status_code == 200
+    assert secret_prompt not in json.dumps(body)
+    assert body["jobs"]["awaiting_payment"] == 1
+    assert body["jobs"]["total_ever"] == 1
+    assert "wallet_address" in body
+    assert resp.headers["Access-Control-Allow-Origin"] == ps.ACTIVITY_CORS_ORIGIN
+
+
+def test_activity_reports_replica_and_self_improve_stats(tmp_path, monkeypatch):
+    ps = make_env(tmp_path, monkeypatch)
+    client = ps.app.test_client()
+
+    with patch("payment_server.replicate_module.load_registry", return_value={"replicas": [
+        {"status": "alive"}, {"status": "alive"},
+    ]}), patch("payment_server.replicate_module.MAX_REPLICAS", 3), \
+         patch("payment_server.self_improve_stats", return_value={"total_commits": 5, "last_commit_message": "self-improve: did a thing"}):
+        resp = client.get("/activity")
+
+    body = resp.get_json()
+    assert body["replicas"] == {"alive": 2, "max": 3}
+    assert body["self_improve"]["total_commits"] == 5
+
+
 def test_confirm_rejects_expired_job(tmp_path, monkeypatch):
     ps = make_env(tmp_path, monkeypatch)
     client = ps.app.test_client()

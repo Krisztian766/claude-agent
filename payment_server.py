@@ -16,6 +16,7 @@ beyond reading, run shell commands, spawn replicas, or edit code.
 """
 import json
 import logging
+import subprocess
 import threading
 import time
 import uuid
@@ -26,6 +27,7 @@ from web3 import Web3
 
 from claude_client import invoke_claude
 from wallet import load_or_create_wallet
+import replicate as replicate_module
 
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_PATH = BASE_DIR / "payment_jobs.json"
@@ -34,6 +36,11 @@ SEPOLIA_RPC = "https://ethereum-sepolia-rpc.publicnode.com"
 PRICE_ETH = 0.0005
 PRICE_WEI = Web3.to_wei(PRICE_ETH, "ether")
 JOB_EXPIRY_SEC = 3600
+START_TIME = time.time()
+
+# /activity is meant to be polled cross-origin from the public portfolio
+# site -- restricted to that one origin, not a wildcard.
+ACTIVITY_CORS_ORIGIN = "https://czeczokrisztian.hu"
 
 # Hard-coded, never taken from the request. See module docstring.
 PAYMENT_TASK_ALLOWED_TOOLS = "Read Grep Glob WebFetch WebSearch"
@@ -186,6 +193,57 @@ def task_status(job_id):
         "status": job["status"],
         "result": job.get("result"),
     })
+
+
+def self_improve_stats() -> dict:
+    """Count/summarize self-improve commits from git log. Commit messages are
+    written by the agent about its OWN decisions (never stranger-submitted
+    content), so they're safe to surface publicly -- unlike job prompts."""
+    try:
+        out = subprocess.run(
+            ["git", "log", "--oneline", "--grep=^self-improve:"],
+            cwd=BASE_DIR, capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+    except Exception:
+        return {"total_commits": 0, "last_commit_message": None}
+    lines = [l for l in out.splitlines() if l.strip()]
+    return {
+        "total_commits": len(lines),
+        "last_commit_message": lines[0].split(" ", 1)[1] if lines else None,
+    }
+
+
+def replica_stats() -> dict:
+    registry = replicate_module.load_registry()
+    alive = replicate_module.alive_count(registry)
+    return {"alive": alive, "max": replicate_module.MAX_REPLICAS}
+
+
+def job_stats() -> dict:
+    jobs = load_jobs().values()
+    counts = {"awaiting_payment": 0, "processing": 0, "done": 0, "error": 0, "expired": 0}
+    for j in jobs:
+        counts[j.get("status", "awaiting_payment")] = counts.get(j.get("status"), 0) + 1
+    counts["total_ever"] = sum(counts.values())
+    return counts
+
+
+@app.route("/activity", methods=["GET"])
+def activity():
+    """Public, abstract-only status feed -- no raw prompt/result text from
+    anyone ever appears here, by design. Safe to expose on a public page."""
+    body = jsonify({
+        "service": "claude-agent",
+        "chain": "sepolia (testnet, no real value)",
+        "wallet_address": wallet["address"],
+        "uptime_sec": int(time.time() - START_TIME),
+        "replicas": replica_stats(),
+        "jobs": job_stats(),
+        "self_improve": self_improve_stats(),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    })
+    body.headers["Access-Control-Allow-Origin"] = ACTIVITY_CORS_ORIGIN
+    return body
 
 
 @app.route("/", methods=["GET"])
