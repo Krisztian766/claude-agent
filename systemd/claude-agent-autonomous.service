@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude Agent autonomous orchestrator
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/claude-agent
+ExecStart=/root/claude-agent/venv/bin/python3 /root/claude-agent/autonomous.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

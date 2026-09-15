@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude Agent x402 payment server (gunicorn, Sepolia testnet)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/claude-agent
+ExecStart=/root/claude-agent/gunicorn_start.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

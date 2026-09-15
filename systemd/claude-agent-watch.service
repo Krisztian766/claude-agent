@@ -1,0 +1,13 @@
+[Unit]
+Description=Claude Agent inbox watch loop
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/claude-agent
+ExecStart=/root/claude-agent/venv/bin/python3 /root/claude-agent/agent.py watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
