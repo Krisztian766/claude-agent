@@ -6,6 +6,7 @@ done/*.task
 done/*.tools
 agent.log
 wallet.json
+payment_jobs.json
 __pycache__/
 *.pyc
 .pytest_cache/

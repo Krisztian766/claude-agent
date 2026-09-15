@@ -47,18 +47,96 @@ A `result.json`-ban van egy `total_cost_usd` mező — ez a Claude Code belső
 használat-becslése (hasznos mennyiségi tájékozódásra), **nem tényleges számla**:
 előfizetéses bejelentkezésnél nincs emiatt külön terhelés hívásonként.
 
-## Folyamatos (autonóm) üzemeltetés
+## Önmódosítás (`self-improve`)
 
-Ha azt szeretnéd, hogy az agent önállóan figyeljen és dolgozzon (pl. systemd service
-`--watch` móddal, ahogy a korábbi honeypot-riport is időzítve frissült), szólj — abból
-a mintából egy `claude-agent.service` egység gyorsan összerakható, csak előbb kell egy
-konkrét feladat, amire ráállítjuk.
+Az agent képes szerkeszteni a saját kódját, git + teszt által védve:
+
+```bash
+python3 agent.py self-improve "Adj hozzá egy X funkciót"
+```
+
+Folyamat: tiszta working tree kötelező (ha van commitolatlan változásod, nem indul —
+nem akarja felülírni a saját munkádat) → Claude szerkeszt (csak `Read Write Edit Grep
+Glob`, nincs Bash) → lefut a teljes tesztsorozat → ha piros, `git reset --hard` (minden
+visszavonva) → ha zöld, `git add -A && git commit`. Élesben tesztelve: hozzáadott egy
+`version` subcommand-ot + tesztet, commitolt (`2c6f785`).
+
+## Önreplikáció (`replicate`)
+
+```bash
+python3 agent.py replicate --name masodik
+```
+
+Másolatot indít magáról `/root/claude-agent-replicas/<name>/` alá. **Keményen
+korlátozva**, mert nincs valós "profit" jelzés ami alapján egy Conway-stílusú agent
+eldönthetné, mikor éri meg replikálódni — ezért ez mindig a tulajdonos saját, explicit
+parancsára történik, sosem az agent saját döntéséből:
+- max. 3 egyidejű, élő példány (globális, megosztott `/root/claude-agent-registry.json`
+  korlátozza, függetlenül attól melyik példányból hívod)
+- max. 2 mélység (replika replikája replikájáig, nem tovább)
+
+Élesben tesztelve: 3 replika sikeresen, a 4. helyesen elutasítva ("replica cap (3)
+reached").
+
+## Fizetésfogadás idegenektől (`payment_server.py`, x402-stílus, Sepolia testnet)
+
+```bash
+source venv/bin/activate
+python3 payment_server.py   # 0.0.0.0:8402
+```
+
+Flow: `POST /task {"prompt":...}` → 402 válasz a fizetendő címmel/összeggel → a fizető
+elküldi a Sepolia ETH-t, majd `POST /task/<id>/confirm {"tx_hash":...}` → a szerver
+**ténylegesen leellenőrzi a láncon** (cél cím, összeg, megerősített tranzakció) → ha
+rendben, lefut a feladat és `GET /task/<id>` adja az eredményt.
+
+**Nem tárgyalható biztonsági korlát:** egy idegen fizetése **soha** nem kap többet, mint
+az alap biztonságos eszközkészletet (`Read Grep Glob WebFetch WebSearch`) — nincs mód
+Bash/Write/self-improve/replicate elérésére a fizetős úton, a kérés body-jában nincs is
+`tools` mező. Ez nem pénzügyi, hanem biztonsági korlát: testneten a pénz nem valódi, de
+egy idegen által irányítható, író/futtató jogú agent egy nyitott ajtó lenne a gépre.
+
+Wallet: `wallet.py` generál egyet első indításkor (`wallet.json`, **nincs gitben**,
+chmod 600). Élesben tesztelve valódi Sepolia RPC-n (publicnode.com, nincs API kulcs):
+helyesen elutasította a nem létező tranzakció-hash-t. **A wallet még nincs feltöltve**
+teszt ETH-vel — fizetés-elfogadás végigteszteléséhez az kell (Sepolia faucet).
+
+Port: **8402/tcp**, dedikáltan erre nyitva a tűzfalon (minden más továbbra is zárva).
+
+## Nyomon követés
+
+- **`python3 agent.py status`** — várakozó és legutóbbi kész `inbox`/`done` feladatok.
+- **`agent.log`** — minden inbox/done futás naplózva (időbélyeg, task név, siker/hiba).
+- **`git log --oneline`** — minden self-improve commit itt látszik, mit módosított
+  magán az agent és mikor.
+- **`/root/claude-agent-registry.json`** — létrehozott replikák listája, állapotuk.
+- **`payment_jobs.json`** — fizetős feladatok állapota (várakozik/fizetve/kész/hiba).
+- Ha `payment_server.py` fut, a `journalctl -u claude-agent-payment -f`-fel lehet élőben
+  követni, **de ehhez a systemd service-t még jóvá kell hagynod** — lásd lent.
 
 ## Tesztelve (2026-09-15)
 
+34 automatizált teszt (`pytest tests/ -q`), plusz élő, valódi tesztek:
 - Sima kérdés-válasz: működik, helyes választ ad.
 - Tiltott eszköz (Bash) próbálkozás: helyesen elutasítva, nem akadt be, a
   `permission_denials` mezőben látszik. Az agent ilyenkor az engedélyezett
   eszközökkel próbál alternatív megoldást találni (pl. `Read`-del olvassa ki a fájlt,
   amit `Bash`-sel akart volna `cat`-elni) — ellenőrizve valós, nem kitalált adattal
   (`/proc/uptime` értéke egyezett a tényleges rendszerértékkel).
+- `self-improve`: valódi self-edit, tesztek lefutottak, commitolt.
+- `replicate`: 3 replika sikeres, 4. helyesen elutasítva a globális korlát miatt.
+- `payment_server`: valódi Sepolia RPC-n keresztül helyesen elutasította egy nem
+  létező tranzakció hash-t; a fizetés-elfogadás pozitív útja még nincs élesben
+  tesztelve (a wallet nincs feltöltve).
+
+## Nyitott pontok
+
+- A fizetési szerver **nincs még folyamatosan futtatva** — a systemd service fájl
+  létrehozását a rendszer biztonsági okból (tartós, magától induló szolgáltatás)
+  jóváhagyás nélkül nem engedélyezte. Kézzel indítható (`python3 payment_server.py`),
+  de újraindulás/reboot után nem éled újra magától, amíg ezt nem hagyod jóvá.
+- A wallet nincs feltöltve Sepolia teszt ETH-vel — enélkül a fizetéses út pozitív ága
+  (valódi fizetés → feldolgozás) nincs végigtesztelve.
+- Flask beépített dev szervere fut, ami maga is figyelmeztet, hogy nem
+  production-grade — nyilvános, komolyabb terhelésnél érdemes gunicorn + reverse proxy
+  mögé tenni.
