@@ -203,6 +203,16 @@ javítani?" kérdés. A tényleges javításnál viszont **az agent maga válasz
 minden ciklusban (a FEELING/DECISION válasz mellett egy MODEL sort is kér),
 aszerint, hogy mennyire bonyolultnak tűnik a talált probléma.
 
+## Dark web kutatás (`dark_research.py`)
+
+Tor SOCKS proxyn (`127.0.0.1:9050`) keresztüli, **csak olvasó** `.onion`
+lekérdezés OSINT/kutatási célra. Kemény korlátok, kódban kikényszerítve, nem
+csak szabályként: kizárólag GET, nincs fájlletöltés (csak szöveg,
+méretkorlátozott), nincs tranzakció (a modulnak nincs elérése a wallet
+aláíró funkcióihoz), és minden lekérdezés naplózva van (`dark_research.log`).
+Nem érhető el a fizetési szerveren keresztül — ugyanaz a határ, mint a
+Bash/Docker-nél.
+
 ## Ügyfélkeresés (`outreach.py`)
 
 Az autonóm ciklus naponta legfeljebb egyszer megír egy kiajánlás-szöveget a
