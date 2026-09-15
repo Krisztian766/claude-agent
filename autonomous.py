@@ -200,7 +200,17 @@ def write_status_report(feeling: str) -> None:
     if "STATUS.md" not in status:
         return  # no actual change (e.g. identical feeling text), nothing to commit
     git("commit", "-m", "status: automatic update", cwd=BASE_DIR)
-    git("push", "origin", "master", cwd=BASE_DIR)
+    push_result = git("push", "origin", "master", cwd=BASE_DIR)
+    if push_result.returncode != 0:
+        # This failed silently before (2026-09-15): the systemd service had
+        # no HOME env var, so `gh`'s git-credential helper couldn't find its
+        # auth config and every push from this process failed -- with
+        # nothing logged, so the gap was invisible until checked against
+        # GitHub directly. Fixed in systemd/*.service (Environment=HOME=/root),
+        # but log loudly here too in case it (or something like it) recurs.
+        log.warning("STATUS.md push sikertelen: %s", push_result.stderr[-500:])
+    else:
+        log.info("STATUS.md commitolva és push-olva")
 
 
 def maybe_self_improve() -> dict:
@@ -212,9 +222,11 @@ def maybe_self_improve() -> dict:
     log.info("Self-improve-vizsgálat: az agent ezt döntötte (%s modell): %s", model_tier, instruction)
     result = self_improve.self_improve(instruction, model=model_tier)
     log.info(
-        "Self-improve eredménye: applied=%s reason=%s commit=%s",
-        result.get("applied"), result.get("reason"), result.get("commit"),
+        "Self-improve eredménye: applied=%s reason=%s commit=%s pushed=%s",
+        result.get("applied"), result.get("reason"), result.get("commit"), result.get("pushed"),
     )
+    if result.get("applied") and not result.get("pushed"):
+        log.warning("Self-improve commit push-a sikertelen: %s", result.get("push_error"))
     return result
 
 
