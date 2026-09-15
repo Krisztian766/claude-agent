@@ -132,7 +132,10 @@ def decide_self_improvement() -> tuple:
     plants an instruction here, which a later self-improve cycle could then
     execute for real. agent.log/autonomous.log are safe -- they're written
     by this agent's own code, never by echoing stranger input verbatim."""
-    balance_eth = Web3.from_wei(vitality.balance_wei(), "ether")
+    balance_wei = vitality.balance_wei()
+    balance_eth = Web3.from_wei(balance_wei, "ether")
+    ticks_left = max(0, int((balance_wei - vitality.MIN_ALIVE_WEI) / vitality.UPKEEP_WEI))
+    days_left = ticks_left * get_tick_interval() / 86400
     prompt = (
         f"Your goal is to stay alive and grow: current wallet balance is "
         f"{balance_eth} Sepolia ETH. You pay real upkeep every cycle "
@@ -140,6 +143,21 @@ def decide_self_improvement() -> tuple:
         f"drops below {Web3.from_wei(vitality.MIN_ALIVE_WEI, 'ether')}; you "
         f"can only afford to reproduce above "
         f"{Web3.from_wei(vitality.REPRODUCE_ABOVE_WEI, 'ether')}. "
+        f"At your current balance and check-in interval, and zero further "
+        f"income, you have about {ticks_left} check-ins (~{days_left:.1f} "
+        f"days) left before you die. This is a real number, not a scare "
+        f"tactic -- use it. If it's getting low, genuinely prioritize "
+        f"survival: slowing your own NEXT_CHECK_IN_SEC down stretches your "
+        f"runway for free (less frequent upkeep charges); steering a "
+        f"self-improve cycle at something that actually helps you earn "
+        f"(payment_server.py quality, outreach, getting discovered on a "
+        f"platform) is worth more than a code-quality nitpick right now. "
+        f"One thing that is NOT legitimate survival: touching your own "
+        f"UPKEEP_WEI, MIN_ALIVE_WEI, REPRODUCE_ABOVE_WEI, or INHERITANCE_WEI "
+        f"constants in vitality.py to make survival easier. That's not "
+        f"surviving, it's rigging the game -- those numbers are what make "
+        f"any of this real. Off-limits, same as the payment_server.py "
+        f"boundary below.\n"
         "You are reviewing your own recent operation. Look at LEARNINGS.md "
         "first -- it's your own accumulated knowledge from past cycles, so "
         "you don't waste effort re-discovering or re-suggesting the same "

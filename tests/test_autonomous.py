@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import autonomous  # noqa: E402
+import vitality  # noqa: E402
 
 
 def test_maybe_reproduce_skips_below_threshold():
@@ -140,6 +141,46 @@ def test_decide_self_improvement_invites_platform_discovery():
     assert "awesome-agentic-commerce" in prompt
     assert "moltbook_credentials.json" in prompt
     assert "real-money trading platforms" in prompt  # explicit skip-list, already considered
+
+
+def test_decide_self_improvement_shows_real_runway_estimate(tmp_path, monkeypatch):
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    autonomous.set_tick_interval(600)
+    captured = {}
+
+    def fake_invoke(prompt, tools, model=None):
+        captured["prompt"] = prompt
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+
+    # balance - MIN_ALIVE_WEI = 999 * UPKEEP_WEI exactly -> 999 ticks left
+    balance = vitality.MIN_ALIVE_WEI + 999 * vitality.UPKEEP_WEI
+    with patch("autonomous.vitality.balance_wei", return_value=balance), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    prompt = captured["prompt"]
+    assert "999 check-ins" in prompt
+    expected_days = 999 * 600 / 86400
+    assert f"{expected_days:.1f}" in prompt
+
+
+def test_decide_self_improvement_forbids_tuning_own_economic_constants():
+    captured = {}
+
+    def fake_invoke(prompt, tools, model=None):
+        captured["prompt"] = prompt
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    prompt = captured["prompt"]
+    for constant in ("UPKEEP_WEI", "MIN_ALIVE_WEI", "REPRODUCE_ABOVE_WEI", "INHERITANCE_WEI"):
+        assert constant in prompt
+    assert "rigging the game" in prompt
 
 
 def test_decide_self_improvement_never_reads_payment_jobs():
