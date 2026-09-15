@@ -1,0 +1,79 @@
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import self_improve  # noqa: E402
+
+
+def make_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n*.pyc\n")
+    (repo / "src.py").write_text("VALUE = 1\n")
+    (repo / "tests" / "test_src.py").write_text(
+        "import sys, pathlib\n"
+        "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))\n"
+        "import src\n"
+        "def test_value():\n"
+        "    assert src.VALUE == 1\n"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+    return repo
+
+
+def test_refuses_when_tree_dirty(tmp_path):
+    repo = make_repo(tmp_path)
+    (repo / "src.py").write_text("VALUE = 2\n")  # uncommitted change
+
+    result = self_improve.self_improve("do something", cwd=repo)
+
+    assert result["applied"] is False
+    assert "not clean" in result["reason"]
+
+
+def test_no_changes_made(tmp_path):
+    repo = make_repo(tmp_path)
+
+    with patch("self_improve.invoke_claude", return_value={"result": "nothing to do"}):
+        result = self_improve.self_improve("do nothing", cwd=repo)
+
+    assert result["applied"] is False
+    assert result["reason"] == "no changes made"
+
+
+def test_successful_self_edit_commits(tmp_path):
+    repo = make_repo(tmp_path)
+
+    def fake_invoke(prompt, tools, cwd=None):
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
+        return {"result": "added EXTRA"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("add EXTRA constant", cwd=repo)
+
+    assert result["applied"] is True
+    assert result["commit"]
+    log = subprocess.run(["git", "log", "--oneline", "-1"], cwd=repo, capture_output=True, text=True).stdout
+    assert "self-improve" in log
+
+
+def test_failing_tests_get_reverted(tmp_path):
+    repo = make_repo(tmp_path)
+
+    def fake_invoke(prompt, tools, cwd=None):
+        (repo / "src.py").write_text("VALUE = 999\n")  # breaks test_value
+        return {"result": "broke it"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("break things", cwd=repo)
+
+    assert result["applied"] is False
+    assert "reverted" in result["reason"]
+    assert self_improve.working_tree_clean(cwd=repo)
+    assert (repo / "src.py").read_text() == "VALUE = 1\n"

@@ -8,24 +8,31 @@ Claude Code itself uses interactively.
 
 Usage:
     agent.py submit "prompt text" [--name foo] [--tools "Read Write Bash"]
-    agent.py run              # process whatever's pending in inbox/, then exit
-    agent.py watch            # keep polling inbox/ forever
-    agent.py status           # show pending and recently completed tasks
+    agent.py run                        # process whatever's pending, then exit
+    agent.py watch                      # keep polling inbox/ forever
+    agent.py status                     # show pending / recently completed tasks
+    agent.py self-improve "instruction" # let the agent edit its own code (git+test gated)
+    agent.py replicate [--name id]      # spawn a bounded copy of this agent
 
 Per-task tool access:
     By default a task can only use read-only/research tools (see
     DEFAULT_ALLOWED_TOOLS below) -- it cannot run shell commands or write
     files unless you opt in via `submit --tools` or a hand-written sidecar
     file "<task>.task.tools" next to a manually dropped *.task file.
+
+    Tasks that originate from the payment server (payment_server.py, i.e.
+    from anonymous strangers who paid) are ALWAYS forced onto the safe
+    default tools regardless of any --tools override -- see payment_server.py.
 """
 import argparse
 import json
 import logging
-import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+
+from claude_client import invoke_claude
 
 BASE_DIR = Path(__file__).resolve().parent
 INBOX_DIR = BASE_DIR / "inbox"
@@ -33,7 +40,6 @@ DONE_DIR = BASE_DIR / "done"
 LOG_FILE = BASE_DIR / "agent.log"
 
 DEFAULT_ALLOWED_TOOLS = "Read Grep Glob WebFetch WebSearch"
-CLAUDE_TIMEOUT_SEC = 900
 POLL_INTERVAL_SEC = 10
 
 log = logging.getLogger("claude-agent")
@@ -50,36 +56,6 @@ def setup_logging() -> None:
 
 def tools_sidecar_for(task_path: Path) -> Path:
     return task_path.with_suffix(task_path.suffix + ".tools")
-
-
-def build_claude_cmd(prompt: str, allowed_tools: str) -> list:
-    return [
-        "claude", "-p", prompt,
-        "--output-format", "json",
-        "--permission-prompts", "none",
-        "--allowedTools", allowed_tools,
-    ]
-
-
-def invoke_claude(prompt: str, allowed_tools: str) -> dict:
-    """Runs one `claude -p` call and returns a result payload dict.
-    Never raises -- failures come back as {"error": ...} so callers can
-    always archive something."""
-    cmd = build_claude_cmd(prompt, allowed_tools)
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=CLAUDE_TIMEOUT_SEC)
-    except subprocess.TimeoutExpired:
-        return {"error": f"timeout after {CLAUDE_TIMEOUT_SEC}s"}
-    except FileNotFoundError:
-        return {"error": "claude CLI not found on PATH"}
-
-    if result.returncode != 0:
-        return {"error": result.stderr[:2000] or f"exit {result.returncode}"}
-
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {"raw_output": result.stdout}
 
 
 def run_task(task_path: Path) -> None:
@@ -163,6 +139,22 @@ def cmd_status(_args: argparse.Namespace) -> None:
         print(f"  - [{status}] {p.name}: {summary}")
 
 
+def cmd_self_improve(args: argparse.Namespace) -> None:
+    import self_improve
+    result = self_improve.self_improve(args.instruction)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result.get("applied"):
+        sys.exit(1)
+
+
+def cmd_replicate(args: argparse.Namespace) -> None:
+    import replicate
+    result = replicate.spawn_replica(name=args.name)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not result.get("spawned"):
+        sys.exit(1)
+
+
 def main() -> None:
     setup_logging()
     parser = argparse.ArgumentParser(description="Claude Code CLI-re épülő agent")
@@ -183,6 +175,14 @@ def main() -> None:
 
     p_status = sub.add_parser("status", help="Várakozó és kész feladatok listája")
     p_status.set_defaults(func=cmd_status)
+
+    p_self_improve = sub.add_parser("self-improve", help="Az agent szerkeszti a saját kódját (git+teszt védett)")
+    p_self_improve.add_argument("instruction", help="Mit javítson/fejlesszen magán")
+    p_self_improve.set_defaults(func=cmd_self_improve)
+
+    p_replicate = sub.add_parser("replicate", help="Új, korlátozott számú példány indítása magáról")
+    p_replicate.add_argument("--name", help="Az új példány azonosítója")
+    p_replicate.set_defaults(func=cmd_replicate)
 
     args = parser.parse_args()
     args.func(args)
