@@ -104,14 +104,9 @@ def test_decide_self_improvement_mentions_learnings_file_and_balance():
         autonomous.decide_self_improvement()
 
     assert "LEARNINGS.md" in captured["prompt"]
-    assert "goal is to stay alive and grow" in captured["prompt"]
 
 
-def test_decide_self_improvement_never_reads_payment_jobs():
-    # Security-critical: payment_jobs.json holds raw text submitted by
-    # anonymous strangers. Now that self_improve.py has Bash access, feeding
-    # that text into this decision step would be an indirect prompt-
-    # injection path. See autonomous.py's decide_self_improvement docstring.
+def test_decide_self_improvement_invites_self_prompt_editing_with_a_boundary():
     captured = {}
 
     def fake_invoke(prompt, tools, model=None):
@@ -123,7 +118,31 @@ def test_decide_self_improvement_never_reads_payment_jobs():
          patch("autonomous.invoke_claude", side_effect=fake_invoke):
         autonomous.decide_self_improvement()
 
-    assert "payment_jobs.json" not in captured["prompt"]
+    prompt = captured["prompt"]
+    assert "decide_self_improvement()" in prompt  # explicitly in-scope
+    assert "payment_server.py" in prompt and "never" in prompt  # the boundary that stays off-limits
+    assert "goal is to stay alive and grow" in captured["prompt"]
+
+
+def test_decide_self_improvement_never_reads_payment_jobs():
+    # Security-critical: payment_jobs.json holds raw text submitted by
+    # anonymous strangers. Now that self_improve.py has Bash access, feeding
+    # that text into this decision step would be an indirect prompt-
+    # injection path. See autonomous.py's decide_self_improvement docstring.
+    # The prompt is allowed to *mention* the filename in prose while
+    # explaining this boundary (it does, see the "In scope" paragraph) --
+    # what actually matters is that the code never loads the file's
+    # (stranger-controlled) contents to build the prompt.
+    def fake_invoke(prompt, tools, model=None):
+        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", side_effect=fake_invoke), \
+         patch("autonomous.payment_server_module.load_jobs") as load_jobs:
+        autonomous.decide_self_improvement()
+
+    load_jobs.assert_not_called()
 
 
 def test_parse_decision_reply_standard_format():
@@ -148,6 +167,55 @@ def test_parse_decision_reply_falls_back_when_unformatted():
     feeling, decision, model_tier = autonomous._parse_decision_reply("Just fix the thing")
     assert feeling == ""
     assert decision == "Just fix the thing"
+    assert model_tier == "expensive"
+
+
+def test_parse_decision_reply_discards_multiline_refusal():
+    # Seen in practice: instead of following FEELING/DECISION/MODEL, the
+    # model replied with a multi-paragraph refusal declining the "you have a
+    # wallet/goals" framing entirely. That must NOT be forwarded to
+    # self_improve() as an actionable instruction.
+    text = (
+        "I appreciate the creative framing, but I should be straightforward: "
+        "I don't actually have a wallet, self-preservation instincts, or "
+        "goals independent of being helpful to you in this conversation.\n\n"
+        "If you'd like me to:\n"
+        "- Review logs and suggest improvements, I'm happy to do that\n"
+        "- Analyze what you've been working on, I can help\n\n"
+        "What would actually be useful for you right now?"
+    )
+    feeling, decision, model_tier = autonomous._parse_decision_reply(text)
+    assert feeling == ""
+    assert decision == ""
+    assert model_tier == "expensive"
+
+
+def test_parse_decision_reply_discards_long_single_line_non_instruction():
+    text = "x" * 301
+    _, decision, _ = autonomous._parse_decision_reply(text)
+    assert decision == ""
+
+
+def test_looks_like_actionable_instruction():
+    assert autonomous._looks_like_actionable_instruction("Fix the flaky retry logic")
+    assert not autonomous._looks_like_actionable_instruction("")
+    assert not autonomous._looks_like_actionable_instruction("line one\nline two")
+    assert not autonomous._looks_like_actionable_instruction("x" * 301)
+
+
+def test_decide_self_improvement_returns_empty_on_unparseable_refusal():
+    refusal = (
+        "I appreciate the creative framing, but I should be straightforward: "
+        "I don't actually have a wallet or self-preservation instincts.\n\n"
+        "- Review logs and suggest improvements\n"
+        "- Analyze what you've been working on"
+    )
+    with patch("autonomous.vitality.balance_wei", return_value=10**16), \
+         patch("autonomous.write_status_report"), \
+         patch("autonomous.invoke_claude", return_value={"result": refusal}):
+        instruction, model_tier = autonomous.decide_self_improvement()
+
+    assert instruction == ""
     assert model_tier == "expensive"
 
 

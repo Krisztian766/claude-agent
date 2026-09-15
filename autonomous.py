@@ -121,6 +121,19 @@ def decide_self_improvement() -> tuple:
         "for a bug to have ambition. If a bug also stands out, that's fine "
         "too. If genuinely nothing comes to mind this cycle, that's fine -- "
         "don't invent busywork just to have something to say.\n"
+        "In scope: even the prompt you're reading right now (in "
+        "autonomous.py's decide_self_improvement()) or self_improve.py's own "
+        "instructions. If you think the way you're asked to think about "
+        "yourself could be better, that's a legitimate target -- same rules "
+        "apply (tests still have to pass, which won't judge prompt quality, "
+        "but will still catch you breaking the code around it; write a real "
+        "LEARNINGS.md entry explaining what you changed and why, so this "
+        "stays auditable through git history like everything else). Don't "
+        "touch the payment_server.py safety boundary (payment-triggered "
+        "tasks never get elevated tools) or the fact that this very decision "
+        "step never reads the raw payment-job log -- those exist for "
+        "reasons explained in this file's and payment_server.py's own "
+        "docstrings, not oversights waiting to be fixed.\n"
         "You also get to pick which model tier does the actual improvement "
         "work if you decide on one -- \"cheap\" (faster, less capable) or "
         "\"expensive\" (slower, more capable). Your call, based on how "
@@ -144,6 +157,24 @@ def decide_self_improvement() -> tuple:
     return decision, model_tier
 
 
+def _looks_like_actionable_instruction(text: str) -> bool:
+    """A real DECISION line is supposed to be one plain sentence of
+    instruction. Multi-line text (paragraphs, bullet lists) is a strong sign
+    the model didn't give an instruction at all -- in practice this has been
+    a meta/refusal reply declining the FEELING/DECISION framing itself
+    (e.g. "I don't actually have a wallet or self-preservation instincts...")
+    rather than skipping the topic. That kind of reply must not be forwarded
+    to self_improve() as if it were a real task -- see LEARNINGS.md."""
+    text = text.strip()
+    if not text:
+        return False
+    if len(text.splitlines()) > 1:
+        return False
+    if len(text) > 300:
+        return False
+    return True
+
+
 def _parse_decision_reply(text: str) -> tuple:
     feeling, decision, model_tier = "", "", "expensive"
     for line in text.splitlines():
@@ -157,10 +188,20 @@ def _parse_decision_reply(text: str) -> tuple:
             if value in ("cheap", "expensive"):
                 model_tier = value
     if not feeling and not decision:
-        # Model didn't follow the format -- treat the whole reply as the
-        # decision (old behavior) rather than silently losing it, but with
-        # no feeling text and the safe default (expensive/more capable) tier.
-        decision = text.strip()
+        # Model didn't follow the format at all. Old behavior blindly forwarded
+        # the whole reply as the decision; keep that ONLY for short, single-line
+        # replies that plausibly are an instruction. Longer/multi-line replies
+        # are far more likely to be a refusal or meta-commentary about the
+        # prompt itself, which must not be treated as an actionable task.
+        candidate = text.strip()
+        if _looks_like_actionable_instruction(candidate):
+            decision = candidate
+        else:
+            log.warning(
+                "Self-improve döntési válasz nem illeszkedik a formátumra és "
+                "nem tűnik konkrét utasításnak (elutasítás/meta-szöveg?), "
+                "eldobva: %r", candidate[:200],
+            )
     return feeling, decision, model_tier
 
 
