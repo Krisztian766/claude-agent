@@ -125,9 +125,22 @@ def self_improve(instruction: str, cwd=None) -> dict:
             "claude_result": claude_result,
         }
 
+    push_result = git("push", "origin", "master", cwd=cwd)
+    pushed = push_result.returncode == 0
+    if not pushed:
+        # Don't revert a good, tested, already-committed change just because
+        # the push failed (network blip, remote auth issue) -- the change is
+        # still real and safe locally. Just report it so a gap is visible
+        # instead of silently assuming GitHub is in sync.
+        log_push_failure = push_result.stderr[-500:]
+    else:
+        log_push_failure = None
+
     return {
         "applied": True,
         "commit": commit_hash,
+        "pushed": pushed,
+        "push_error": log_push_failure,
         "test_output": test_result.stdout[-2000:],
         "claude_result": claude_result,
     }

@@ -70,6 +70,25 @@ def test_successful_self_edit_commits(tmp_path):
     assert "self-improve" in log
 
 
+def test_push_failure_does_not_revert_an_already_good_commit(tmp_path):
+    # The test repo has no "origin" remote, so the push is expected to fail
+    # here -- applied must still be True (a tested, committed change is real
+    # and safe locally regardless of push outcome), just reported honestly.
+    repo = make_repo(tmp_path)
+
+    def fake_invoke(prompt, tools, cwd=None):
+        (repo / "src.py").write_text("VALUE = 1\nEXTRA = 42\n")
+        (repo / "LEARNINGS.md").write_text("# Learnings\n\n- added EXTRA\n")
+        return {"result": "added EXTRA"}
+
+    with patch("self_improve.invoke_claude", side_effect=fake_invoke):
+        result = self_improve.self_improve("add EXTRA constant", cwd=repo)
+
+    assert result["applied"] is True
+    assert result["pushed"] is False
+    assert result["push_error"]
+
+
 def test_prompt_instructs_updating_learnings_file(tmp_path):
     repo = make_repo(tmp_path)
     captured = {}

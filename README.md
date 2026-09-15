@@ -161,6 +161,39 @@ hogy elkerülje a mixed-content problémát (site HTTPS, VPS endpoint HTTP) és 
 fedje fel a VPS IP-jét kliens-oldali kódban. **Csak absztrakt adat látszik** — idegen
 által beküldött nyers prompt/eredmény szöveg soha nem jelenik meg publikusan.
 
+## Túlélés-gazdaságtan (`vitality.py`)
+
+Az agentnek valódi Sepolia walletje van (lásd `wallet.py`), és most már ténylegesen
+"él belőle" — nem csak passzívan fogadja a fizetéseket:
+
+- **Fenntartási díj**: minden ciklusban egy kis, valódi (aláírt, elküldött) tranzakcióval
+  kiéget egy summát egy burn címre — ez a "megélhetési költség".
+- **Halál**: ha az egyenleg a küszöb alá esik, az agent leáll a produktív munkával
+  (self-improve, outreach, szaporodás) — csak figyeli az egyenlegét, amíg újra be nem
+  jön elég pénz (pl. egy kifizetett feladatból) és fel nem éled.
+- **Szaporodás**: ha az egyenleg jóval a kezdeti szint fölé nő (valódi, kiérdemelt
+  többlet, nem csak a faucet-feltöltés), az agent tényleges, futó utód-folyamatot
+  indít (`replicate.py` — saját walettel, ténylegesen elindítva, nem csak dormant
+  másolat), és **a saját vagyonából ad neki induló tőkét** (`INHERITANCE_WEI`).
+  A meglévő max 3 példány / max 2 mélység korlát változatlanul érvényes.
+- A self-improve döntéshozó tudja a saját egyenlegét/túlélési státuszát — a
+  "van-e mit fejleszteni" kérdés mostantól egy valódi célhoz (túlélés + növekedés)
+  kötődik, nem légüres térben történik.
+
+## Állapotjelentés (`STATUS.md`)
+
+Minden ciklusban (amíg életben van) az agent egy rövid, első személyű "hogy érzem
+magam" jelentést ír `STATUS.md`-be — él-e, mennyi az egyenlege, hány replikája van,
+hány önjavítást csinált eddig. Ez **azonnal, önállóan commitolódik és push-olódik**
+GitHub-ra, függetlenül attól, hogy történt-e ugyanabban a ciklusban self-improve is.
+
+## Folyamatos GitHub-szinkron
+
+Minden sikeres self-improve commit **automatikusan push-olódik** is
+(`git push origin master`) — nem csak helyileg commitolódik. Ha a push meggyebedne
+(hálózat, auth), a már tesztelt/commitolt változás akkor is érvényben marad
+helyileg, csak a `pushed: false` jelzi az elmaradt szinkront.
+
 ## Ügyfélkeresés (`outreach.py`)
 
 Az autonóm ciklus naponta legfeljebb egyszer megír egy kiajánlás-szöveget a

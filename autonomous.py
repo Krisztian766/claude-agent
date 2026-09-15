@@ -1,19 +1,21 @@
 """Autonomous orchestrator: the agent decides FOR ITSELF, on a schedule,
-whether to replicate and/or self-improve. This is the layer that makes the
+whether to reproduce and/or self-improve. This is the layer that makes the
 owner-triggered self_improve.py/replicate.py primitives actually autonomous.
 
-Design intent (owner's explicit request, 2026-09-15): "replicate only if
-useful, creates real value", "self-improve freely, whenever it wants to
-evolve" -- translated into concrete, bounded rules, since neither can be
-literally unbounded without risking runaway subscription usage or an
-unstable self-edit loop:
+Survival economics (owner's explicit request, 2026-09-15, see vitality.py):
+the agent has one real GOAL now -- stay alive and grow -- not just a pile of
+disconnected checks. Every tick it pays a real upkeep cost from its own
+Sepolia wallet; if income (from payment_server.py) doesn't keep pace, its
+balance eventually drops below vitality.MIN_ALIVE_WEI and it stops doing
+productive work (self-improve/outreach/reproduce) until it revives. If it's
+doing well -- balance well above what a fresh wallet starts with, real
+evidence of earned success -- it spawns an actual running offspring process
+and gives it real starting capital from its own balance
+(vitality.INHERITANCE_WEI). Both self-improve's freedom-of-WHAT and the
+outreach cadence now happen in service of that one goal, not in a vacuum --
+decide_self_improvement() is told the current vitality status so its choices
+can be goal-directed (survival/growth) rather than purely reactive to logs.
 
-- Replicate: triggered by the only real, measurable "value" signal that
-  exists in this system -- paid demand. If more than
-  REPLICATE_BACKLOG_THRESHOLD payment_server jobs are concurrently
-  "processing" at once, that's real, external evidence that replicating
-  would let it do more useful work, so it does. Still hard-capped by
-  replicate.py's MAX_REPLICAS/MAX_DEPTH regardless.
 - Self-improve: the agent has completely free choice of WHETHER and WHAT,
   every tick -- nothing here tells it what to improve. What's bounded is the
   tick rate (ORCHESTRATOR_TICK_SEC), so "freely, whenever it wants" can't
@@ -25,21 +27,23 @@ Every decision -- act or deliberately don't -- is logged to autonomous.log,
 so this stays observable rather than a black box. See README "Nyomon
 követés".
 """
-import json
 import logging
+import subprocess
 import time
 from pathlib import Path
+from web3 import Web3
 
 from claude_client import invoke_claude
 import self_improve
+from self_improve import git
 import replicate as replicate_module
 import outreach as outreach_module
+import vitality
 
 BASE_DIR = Path(__file__).resolve().parent
-JOBS_PATH = BASE_DIR / "payment_jobs.json"
 LOG_FILE = BASE_DIR / "autonomous.log"
+STATUS_FILE = BASE_DIR / "STATUS.md"
 
-REPLICATE_BACKLOG_THRESHOLD = 3
 ORCHESTRATOR_TICK_SEC = 1800  # 30 min
 OUTREACH_MIN_INTERVAL_SEC = 86400  # at most once/day -- drafting still costs a real call
 DECISION_TOOLS = "Read Grep Glob"
@@ -56,29 +60,22 @@ def setup_logging() -> None:
     )
 
 
-def load_jobs() -> dict:
-    if not JOBS_PATH.exists():
-        return {}
-    try:
-        return json.loads(JOBS_PATH.read_text())
-    except json.JSONDecodeError:
-        return {}
+def maybe_reproduce() -> dict:
+    balance = vitality.balance_wei()
+    if not vitality.can_reproduce():
+        log.info(
+            "Szaporodás-vizsgálat: egyenleg %s wei < küszöb %s wei, nem szaporodik",
+            balance, vitality.REPRODUCE_ABOVE_WEI,
+        )
+        return {"reproduced": False, "reason": "balance below reproduce threshold", "balance_wei": balance}
 
-
-def processing_backlog() -> int:
-    jobs = load_jobs()
-    return sum(1 for j in jobs.values() if j.get("status") == "processing")
-
-
-def maybe_replicate() -> dict:
-    backlog = processing_backlog()
-    if backlog < REPLICATE_BACKLOG_THRESHOLD:
-        log.info("Replikáció-vizsgálat: torlódás=%d, küszöb=%d, nem replikál", backlog, REPLICATE_BACKLOG_THRESHOLD)
-        return {"replicated": False, "reason": "backlog below threshold", "backlog": backlog}
-
-    log.info("Replikáció-vizsgálat: torlódás=%d >= küszöb=%d, replikál", backlog, REPLICATE_BACKLOG_THRESHOLD)
+    log.info("Szaporodás-vizsgálat: egyenleg %s wei >= küszöb, valódi siker, utód létrehozása", balance)
     result = replicate_module.spawn_replica()
-    log.info("Replikáció eredménye: %s", result)
+    if result.get("spawned"):
+        inheritance = vitality.fund_offspring(result["wallet_address"])
+        result["inheritance"] = inheritance
+        log.info("Örökség eredménye: %s", inheritance)
+    log.info("Szaporodás eredménye: %s", result)
     return result
 
 
@@ -95,7 +92,14 @@ def decide_self_improvement() -> str:
     plants an instruction here, which a later self-improve cycle could then
     execute for real. agent.log/autonomous.log are safe -- they're written
     by this agent's own code, never by echoing stranger input verbatim."""
+    balance_eth = Web3.from_wei(vitality.balance_wei(), "ether")
     prompt = (
+        f"Your goal is to stay alive and grow: current wallet balance is "
+        f"{balance_eth} Sepolia ETH. You pay real upkeep every cycle "
+        f"({Web3.from_wei(vitality.UPKEEP_WEI, 'ether')} ETH); you die if it "
+        f"drops below {Web3.from_wei(vitality.MIN_ALIVE_WEI, 'ether')}; you "
+        f"can only afford to reproduce above "
+        f"{Web3.from_wei(vitality.REPRODUCE_ABOVE_WEI, 'ether')}. "
         "You are reviewing your own recent operation. Look at LEARNINGS.md "
         "first -- it's your own accumulated knowledge from past cycles, so "
         "you don't waste effort re-discovering or re-suggesting the same "
@@ -104,18 +108,84 @@ def decide_self_improvement() -> str:
         "you've actually been doing. "
         "If you see a concrete, worthwhile improvement to your own code "
         "(a real bug, a missing safeguard, a clear inefficiency, a genuinely "
-        "useful small feature) reply with ONLY a one-sentence instruction "
-        "describing it. If nothing concrete stands out, reply with exactly: "
-        "NONE. Don't invent busywork just to have something to say."
+        "useful small feature -- bonus if it plausibly helps you earn or "
+        "survive longer, but don't force that connection if there's a "
+        "better find), say so. If nothing concrete stands out, that's fine "
+        "too -- don't invent busywork just to have something to say.\n"
+        "Reply in EXACTLY this two-line format:\n"
+        "FEELING: <one honest, first-person sentence on how you're doing right now>\n"
+        "DECISION: <NONE, or a one-sentence instruction for the improvement>"
     )
     payload = invoke_claude(prompt, DECISION_TOOLS)
     if "error" in payload:
         log.warning("Self-improve döntési hívás sikertelen: %s", payload["error"])
         return ""
     text = (payload.get("result") or "").strip()
-    if not text or text.upper() == "NONE":
+    feeling, decision = _parse_feeling_and_decision(text)
+    write_status_report(feeling)
+    if not decision or decision.upper() == "NONE":
         return ""
-    return text
+    return decision
+
+
+def _parse_feeling_and_decision(text: str) -> tuple:
+    feeling, decision = "", ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("FEELING:"):
+            feeling = stripped.split(":", 1)[1].strip()
+        elif stripped.upper().startswith("DECISION:"):
+            decision = stripped.split(":", 1)[1].strip()
+    if not feeling and not decision:
+        # Model didn't follow the format -- treat the whole reply as the
+        # decision (old behavior) rather than silently losing it, but with
+        # no feeling text to report.
+        decision = text.strip()
+    return feeling, decision
+
+
+def self_improve_commit_count() -> int:
+    result = subprocess.run(
+        ["git", "log", "--oneline", "--grep=^self-improve:"],
+        cwd=BASE_DIR, capture_output=True, text=True, timeout=5,
+    )
+    return len([l for l in result.stdout.splitlines() if l.strip()])
+
+
+def write_status_report(feeling: str) -> None:
+    """Writes STATUS.md -- a human-readable snapshot of how the agent is
+    doing right now, updated every tick that reaches this point (i.e. every
+    tick where it's alive). Separate from LEARNINGS.md: that's a technical
+    changelog of what was fixed and why; this is the "how am I doing"
+    summary the owner actually asked to see.
+
+    Commits and pushes THIS FILE ONLY, immediately, right here -- not folded
+    into whatever self-improve does later in the same tick. Two reasons:
+    (1) the owner wants status visible on GitHub continuously, not only on
+    ticks where a self-edit also happens to land, and (2) self_improve()
+    refuses to run at all unless the working tree is clean, so if this write
+    were left uncommitted, it would block that step every single cycle."""
+    balance_eth = Web3.from_wei(vitality.balance_wei(), "ether")
+    registry = replicate_module.load_registry()
+    replicas_alive = replicate_module.alive_count(registry)
+    improve_count = self_improve_commit_count()
+    STATUS_FILE.write_text(
+        "# Status\n\n"
+        "_Automatically updated by the agent itself, every autonomous cycle._\n\n"
+        f"**Alive:** {'igen' if vitality.is_alive() else 'nem'}\n"
+        f"**Egyenleg:** {balance_eth} Sepolia ETH\n"
+        f"**Replikák:** {replicas_alive} / {replicate_module.MAX_REPLICAS}\n"
+        f"**Önjavítások eddig:** {improve_count}\n"
+        f"**Frissítve:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n\n"
+        "## Hogy érzem magam\n\n"
+        f"{feeling or '(még nincs jelentés)'}\n"
+    )
+    git("add", "STATUS.md", cwd=BASE_DIR)
+    status = git("status", "--porcelain", cwd=BASE_DIR).stdout
+    if "STATUS.md" not in status:
+        return  # no actual change (e.g. identical feeling text), nothing to commit
+    git("commit", "-m", "status: automatic update", cwd=BASE_DIR)
+    git("push", "origin", "master", cwd=BASE_DIR)
 
 
 def maybe_self_improve() -> dict:
@@ -151,11 +221,25 @@ def maybe_draft_outreach() -> dict:
 
 def tick() -> dict:
     log.info("Autonóm ciklus indul")
-    replicate_result = maybe_replicate()
+
+    if not vitality.is_alive():
+        balance = vitality.balance_wei()
+        log.warning(
+            "Egyenleg %s wei a túlélési küszöb (%s wei) alatt -- 'halott', csak figyel, nem dolgozik",
+            balance, vitality.MIN_ALIVE_WEI,
+        )
+        log.info("Autonóm ciklus vége")
+        return {"alive": False, "balance_wei": balance, "reproduce": None, "self_improve": None, "outreach": None}
+
+    upkeep_result = vitality.pay_upkeep()
+    reproduce_result = maybe_reproduce()
     improve_result = maybe_self_improve()
     outreach_result = maybe_draft_outreach()
     log.info("Autonóm ciklus vége")
-    return {"replicate": replicate_result, "self_improve": improve_result, "outreach": outreach_result}
+    return {
+        "alive": True, "upkeep": upkeep_result, "reproduce": reproduce_result,
+        "self_improve": improve_result, "outreach": outreach_result,
+    }
 
 
 def run_forever() -> None:
@@ -164,7 +248,7 @@ def run_forever() -> None:
     while True:
         try:
             result = tick()
-            if result["self_improve"].get("applied"):
+            if result.get("self_improve") and result["self_improve"].get("applied"):
                 # A self-edit landed on disk, but this already-running
                 # process still has the OLD code loaded in memory. Exit
                 # cleanly and let systemd's Restart=always bring it back up
