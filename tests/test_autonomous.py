@@ -69,6 +69,23 @@ def test_decide_self_improvement_returns_instruction():
         assert autonomous.decide_self_improvement() == "Fix the flaky retry logic"
 
 
+def test_decide_self_improvement_never_reads_payment_jobs():
+    # Security-critical: payment_jobs.json holds raw text submitted by
+    # anonymous strangers. Now that self_improve.py has Bash access, feeding
+    # that text into this decision step would be an indirect prompt-
+    # injection path. See autonomous.py's decide_self_improvement docstring.
+    captured = {}
+
+    def fake_invoke(prompt, tools):
+        captured["prompt"] = prompt
+        return {"result": "NONE"}
+
+    with patch("autonomous.invoke_claude", side_effect=fake_invoke):
+        autonomous.decide_self_improvement()
+
+    assert "payment_jobs.json" not in captured["prompt"]
+
+
 def test_maybe_self_improve_skips_when_nothing_decided():
     with patch("autonomous.decide_self_improvement", return_value=""), \
          patch("autonomous.self_improve.self_improve") as si:

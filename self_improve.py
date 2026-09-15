@@ -1,18 +1,37 @@
 """Self-modification: lets the agent edit its own source code, gated by git
-and the test suite so a bad self-edit can never stick.
+and the test suite so a bad EDIT can never stick.
 
 Flow:
   1. Refuse to run if the working tree isn't clean (never revert the
      owner's own uncommitted work).
-  2. Ask Claude (Read/Write/Edit/Grep/Glob only -- no Bash, so it can't do
-     anything outside editing files in this directory) to make the change.
+  2. Ask Claude (Read/Write/Edit/Grep/Glob/Bash -- see below) to make the
+     change.
   3. Run the test suite.
   4. Tests fail  -> `git reset --hard HEAD` + `git clean -fd` (discard
      everything, including any new untracked files), report failure.
      Tests pass  -> `git add -A && git commit`, report the new commit hash.
 
-This is deliberately owner-triggered only (CLI `agent.py self-improve`) --
-nothing reachable from payment_server.py can call this.
+This is deliberately owner-triggered only (CLI `agent.py self-improve`, or
+the owner-configured autonomous.py orchestrator) -- nothing reachable from
+payment_server.py can call this; see payment_server.py's own docstring for
+that boundary.
+
+SECURITY NOTE on Bash (added 2026-09-15, owner's explicit request, including
+Docker access -- "teljes hatalmat... létrehozhat új docker konténereket"):
+git reset/clean only undoes changes to files IN THIS REPO. It does NOT undo
+anything Bash actually DID while a self-improve run was in progress --
+packages installed, containers started, files written elsewhere on the VPS,
+network requests already made. A failed test run reverts the CODE, not the
+side effects. This is a real, accepted risk, not an oversight -- the owner
+was told this explicitly before it was turned on. Two things keep it from
+being worse than it sounds: (1) this path is unreachable from
+payment_server.py / anonymous strangers -- only the owner's own CLI or the
+autonomous orchestrator's own bounded decision loop can trigger it, and (2)
+autonomous.py's decide_self_improvement() deliberately never reads
+payment_jobs.json (stranger-submitted text), specifically to avoid an
+indirect prompt-injection path into this now much more capable tool set --
+don't add that file (or any other stranger-influenced input) back into what
+feeds a self-improve decision without re-closing that gap.
 """
 import subprocess
 import sys
@@ -21,7 +40,7 @@ from pathlib import Path
 from claude_client import invoke_claude
 
 BASE_DIR = Path(__file__).resolve().parent
-SELF_IMPROVE_ALLOWED_TOOLS = "Read Write Edit Grep Glob"
+SELF_IMPROVE_ALLOWED_TOOLS = "Read Write Edit Grep Glob Bash"
 
 
 def git(*args, cwd=None) -> subprocess.CompletedProcess:

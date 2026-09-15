@@ -83,11 +83,20 @@ def maybe_replicate() -> dict:
 def decide_self_improvement() -> str:
     """Cheap, Read-only call: does the agent see something concretely worth
     improving about itself right now? Returns an instruction, or "" if not.
-    Complete editorial freedom on WHAT -- nothing here suggests a topic."""
+    Complete editorial freedom on WHAT -- nothing here suggests a topic.
+
+    Deliberately does NOT read payment_jobs.json -- that file holds raw
+    prompt text submitted by anonymous strangers via payment_server.py. Now
+    that self_improve.py has Bash access (see self_improve.py), letting this
+    decision step read attacker-controlled text would be a real indirect
+    prompt-injection path: a stranger could craft a paid task prompt that
+    plants an instruction here, which a later self-improve cycle could then
+    execute for real. agent.log/autonomous.log are safe -- they're written
+    by this agent's own code, never by echoing stranger input verbatim."""
     prompt = (
-        "You are reviewing your own recent operation. Look at agent.log, "
-        "autonomous.log, and payment_jobs.json in this directory (if they "
-        "exist) to see what you've actually been doing. "
+        "You are reviewing your own recent operation. Look at agent.log and "
+        "autonomous.log in this directory (if they exist) to see what "
+        "you've actually been doing. "
         "If you see a concrete, worthwhile improvement to your own code "
         "(a real bug, a missing safeguard, a clear inefficiency, a genuinely "
         "useful small feature) reply with ONLY a one-sentence instruction "

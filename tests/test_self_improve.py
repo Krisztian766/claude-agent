@@ -27,6 +27,12 @@ def make_repo(tmp_path):
     return repo
 
 
+def test_self_improve_now_has_bash_access():
+    # Intentional, owner-approved 2026-09-15 (see self_improve.py module
+    # docstring for the security tradeoff this represents).
+    assert "Bash" in self_improve.SELF_IMPROVE_ALLOWED_TOOLS
+
+
 def test_refuses_when_tree_dirty(tmp_path):
     repo = make_repo(tmp_path)
     (repo / "src.py").write_text("VALUE = 2\n")  # uncommitted change
