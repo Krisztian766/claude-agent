@@ -1,0 +1,11 @@
+venv/
+inbox/*.task
+inbox/*.tools
+done/*.json
+done/*.task
+done/*.tools
+agent.log
+wallet.json
+__pycache__/
+*.pyc
+.pytest_cache/
