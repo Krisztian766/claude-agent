@@ -13,3 +13,4 @@ payment_jobs.json.lock
 __pycache__/
 *.pyc
 .pytest_cache/
+moltbook_credentials.json
