@@ -129,6 +129,38 @@ Port: **8402/tcp**, dedikáltan erre nyitva a tűzfalon (minden más továbbra i
   létező tranzakció hash-t; a fizetés-elfogadás pozitív útja még nincs élesben
   tesztelve (a wallet nincs feltöltve).
 
+## Autonóm réteg (`autonomous.py`)
+
+A fentiek (self-improve, replicate) alapból a tulajdonos parancsára futnak. Az
+`autonomous.py` teszi ezeket ténylegesen önállóvá — 30 percenként (`ORCHESTRATOR_TICK_SEC`)
+lefut egy ciklus:
+
+- **Replikáció**: csak akkor, ha valódi, mérhető kereslet van rá — 3+ egyidejűleg
+  feldolgozás alatt lévő kifizetett feladat esetén replikál (a `replicate.py` saját
+  max 3/max 2 mélység korlátja továbbra is érvényes).
+- **Self-improve**: az agentnek teljesen szabad keze van eldönteni MIT és HOGY
+  fejlesszen — egy olcsó, csak-olvasó "van-e konkrét ötletem?" ellenőrzés fut minden
+  ciklusban, és csak akkor fizetünk egy teljes (drágább) self-improve körért, ha erre
+  igent mond. Így "szabadon fejlődhet, amikor akar", de nem pörög kontrollálatlanul.
+
+Minden döntés — cselekvés és tudatos nem-cselekvés is — naplózva van (`autonomous.log`).
+
+## Éles futtatás (systemd)
+
+Három szolgáltatás fut folyamatosan, reboot-túlélően: `claude-agent-payment`
+(gunicorn + nginx reverse proxy a fizetési szerver előtt), `claude-agent-autonomous`,
+`claude-agent-watch`. Unit fájlok: `systemd/*.service` — másold be
+`/etc/systemd/system/`-be, `systemctl daemon-reload`, `systemctl enable --now <name>`.
+
+## Publikus élő nézet
+
+**https://czeczokrisztian.hu/agent.php** — élő, terminál-stílusú dashboard (replikák,
+feladat-számok, legutóbbi self-improve), a `payment_server.py` `/activity`
+végpontjából táplálkozik egy szerver-oldali PHP proxy-n (`agent-data.php`) keresztül,
+hogy elkerülje a mixed-content problémát (site HTTPS, VPS endpoint HTTP) és ne
+fedje fel a VPS IP-jét kliens-oldali kódban. **Csak absztrakt adat látszik** — idegen
+által beküldött nyers prompt/eredmény szöveg soha nem jelenik meg publikusan.
+
 ## Nyitott pontok
 
 - A fizetési szerver **nincs még folyamatosan futtatva** — a systemd service fájl

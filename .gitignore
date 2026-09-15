@@ -5,6 +5,8 @@ done/*.json
 done/*.task
 done/*.tools
 agent.log
+autonomous.log
+logs/
 wallet.json
 payment_jobs.json
 __pycache__/
