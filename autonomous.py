@@ -163,7 +163,16 @@ def run_forever() -> None:
     log.info("Autonóm orchestrátor elindult (ciklus %d másodpercenként)", ORCHESTRATOR_TICK_SEC)
     while True:
         try:
-            tick()
+            result = tick()
+            if result["self_improve"].get("applied"):
+                # A self-edit landed on disk, but this already-running
+                # process still has the OLD code loaded in memory. Exit
+                # cleanly and let systemd's Restart=always bring it back up
+                # running the new code -- no human/Claude Code action needed
+                # to "pick up" the change, unlike a brand-new service, this
+                # is just the normal lifecycle of an already-approved one.
+                log.info("Self-improve alkalmazva, újraindulás friss kóddal (systemd Restart=always)")
+                return
         except Exception:
             log.exception("Kezeletlen hiba az autonóm ciklusban, folytatás")
         time.sleep(ORCHESTRATOR_TICK_SEC)

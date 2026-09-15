@@ -125,3 +125,42 @@ def test_tick_calls_both_checks():
     mr.assert_called_once()
     mi.assert_called_once()
     assert "replicate" in result and "self_improve" in result
+
+
+def test_run_forever_exits_after_applied_self_improve_for_systemd_restart():
+    # When self-improve actually lands a code change, this process must exit
+    # (not keep looping with the OLD code still in memory) so systemd's
+    # Restart=always brings it back up running the new code -- see
+    # run_forever()'s docstring-equivalent comment.
+    with patch("autonomous.setup_logging"), \
+         patch("autonomous.tick", return_value={
+             "replicate": {"replicated": False},
+             "self_improve": {"applied": True, "commit": "abc123"},
+             "outreach": {"drafted": False},
+         }) as tick_mock, \
+         patch("autonomous.time.sleep") as sleep_mock:
+        autonomous.run_forever()
+
+    tick_mock.assert_called_once()
+    sleep_mock.assert_not_called()
+
+
+def test_run_forever_keeps_looping_when_nothing_applied():
+    calls = {"n": 0}
+
+    def fake_tick():
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise SystemExit  # break out of the infinite loop for the test
+        return {"replicate": {"replicated": False}, "self_improve": {"applied": False}, "outreach": {"drafted": False}}
+
+    with patch("autonomous.setup_logging"), \
+         patch("autonomous.tick", side_effect=fake_tick), \
+         patch("autonomous.time.sleep") as sleep_mock:
+        try:
+            autonomous.run_forever()
+        except SystemExit:
+            pass
+
+    assert calls["n"] == 3
+    assert sleep_mock.call_count == 2
