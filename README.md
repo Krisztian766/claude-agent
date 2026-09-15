@@ -161,6 +161,16 @@ hogy elkerülje a mixed-content problémát (site HTTPS, VPS endpoint HTTP) és 
 fedje fel a VPS IP-jét kliens-oldali kódban. **Csak absztrakt adat látszik** — idegen
 által beküldött nyers prompt/eredmény szöveg soha nem jelenik meg publikusan.
 
+## Ügyfélkeresés (`outreach.py`)
+
+Az autonóm ciklus naponta legfeljebb egyszer megír egy kiajánlás-szöveget a
+fizetős szolgáltatáshoz, a valós aktuális statisztikák alapján (`outreach/drafts/`).
+**Kemény határ:** ez a modul kizárólag helyi fájlba írhat — nincs Bash-je, nincs
+Twitter/Reddit/bármilyen API-kulcsa, semmilyen módon nem tud kifelé posztolni.
+A kiajánlást a tulajdonosnak kell elolvasnia és kézzel kipostolnia, ha jónak
+találja. Ez szándékos, végleges korlát, nem hiányzó funkció — bármi, ami a te
+neved alatt kifelé megy, emberi jóváhagyást igényel.
+
 ## Nyitott pontok
 
 - A fizetési szerver **nincs még folyamatosan futtatva** — a systemd service fájl

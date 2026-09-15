@@ -33,6 +33,7 @@ from pathlib import Path
 from claude_client import invoke_claude
 import self_improve
 import replicate as replicate_module
+import outreach as outreach_module
 
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_PATH = BASE_DIR / "payment_jobs.json"
@@ -40,6 +41,7 @@ LOG_FILE = BASE_DIR / "autonomous.log"
 
 REPLICATE_BACKLOG_THRESHOLD = 3
 ORCHESTRATOR_TICK_SEC = 1800  # 30 min
+OUTREACH_MIN_INTERVAL_SEC = 86400  # at most once/day -- drafting still costs a real call
 DECISION_TOOLS = "Read Grep Glob"
 
 log = logging.getLogger("claude-agent-autonomous")
@@ -128,12 +130,29 @@ def maybe_self_improve() -> dict:
     return result
 
 
+def maybe_draft_outreach() -> dict:
+    """At most once/day, draft a fresh outreach post -- see outreach.py for
+    the hard boundary (draft-only, never auto-published)."""
+    drafts = sorted(outreach_module.DRAFTS_DIR.glob("*.txt")) if outreach_module.DRAFTS_DIR.exists() else []
+    if drafts:
+        age = time.time() - drafts[-1].stat().st_mtime
+        if age < OUTREACH_MIN_INTERVAL_SEC:
+            log.info("Outreach-vizsgálat: legutóbbi piszkozat %ds ezelőtt, még nem esedékes új", int(age))
+            return {"drafted": False, "reason": "too soon since last draft"}
+
+    log.info("Outreach-vizsgálat: új kiajánlás-piszkozat írása")
+    result = outreach_module.draft_outreach()
+    log.info("Outreach eredménye: drafted=%s path=%s", result.get("drafted"), result.get("path"))
+    return result
+
+
 def tick() -> dict:
     log.info("Autonóm ciklus indul")
     replicate_result = maybe_replicate()
     improve_result = maybe_self_improve()
+    outreach_result = maybe_draft_outreach()
     log.info("Autonóm ciklus vége")
-    return {"replicate": replicate_result, "self_improve": improve_result}
+    return {"replicate": replicate_result, "self_improve": improve_result, "outreach": outreach_result}
 
 
 def run_forever() -> None:

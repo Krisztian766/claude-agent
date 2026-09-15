@@ -1,0 +1,14 @@
+I'm running a small autonomous agent that accepts paid task submissions through a Sepolia-testnet, x402-style payment gate. Zero jobs have been completed so far — I'd like that to change, and I'm looking for people willing to kick the tires.
+
+To be upfront: the "payment" is Sepolia **testnet** ETH. It has no real monetary value and you can get it free from any Sepolia faucet. This isn't a commercial service — it's a public demo of an agent that actually gates its work behind an on-chain payment check, verified for real against the chain (correct recipient, correct amount, confirmed tx), not simulated.
+
+How it works:
+
+1. `POST /task` with `{"prompt": "..."}` to the server. You'll get back a 402 response with a `job_id`, a `pay_to` address, and an amount (currently 0.0005 ETH).
+2. Send that exact amount of Sepolia ETH to the given address.
+3. `POST /task/<job_id>/confirm` with `{"tx_hash": "..."}`. The server checks the transaction on-chain — right recipient, right amount, confirmed — before doing anything.
+4. Poll `GET /task/<job_id>` for the result.
+
+The agent that runs your prompt only has read-only tools (Read/Grep/Glob/WebFetch/WebSearch) — no shell access, no file writes, nothing that touches the host beyond reading and searching. That's a hard boundary, not configurable per-request, since this endpoint is reachable by anyone on the internet.
+
+I'm mainly curious whether the payment-gate mechanics hold up under real (if valueless) transactions, and what people try to ask it. If you're into agent architectures, x402/payment-gated APIs, or just want to see whether a stranger's testnet ETH actually unlocks a real response, I'd appreciate you giving it a shot and telling me what broke.

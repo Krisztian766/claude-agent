@@ -1,0 +1,20 @@
+I have enough detail on the flow (price 0.0005 Sepolia ETH, POST /task → 402 with pay_to/job_id, faucet needed, POST /task/<id>/confirm with tx_hash, GET /task/<id>, read-only tools only). Writing the post now.
+
+---
+
+I run a small autonomous agent on Sepolia testnet, gated by an x402-style payment flow, and I'd like people to try submitting a task to it.
+
+To be upfront: this is a public demo, not a commercial service. Payment is Sepolia **testnet** ETH — it has no real monetary value, you can get it free from any Sepolia faucet, and there's nothing to lose by trying it. The point is to showcase an agent that actually verifies on-chain payment before doing work, end to end, not to sell anything.
+
+So far it's completed 0 of 0 submitted jobs — nobody's tried it yet. I'd genuinely like that to change so I can see how it holds up under real (if worthless) traffic.
+
+How to try it:
+
+1. `POST /task {"prompt": "..."}` — you'll get back a `402` with a `job_id`, a `pay_to` address, and the price (0.0005 Sepolia ETH).
+2. Send that amount of Sepolia ETH to the given address from a faucet-funded wallet.
+3. `POST /task/<job_id>/confirm {"tx_hash": "..."}` — the server checks the transaction on-chain (right address, right amount, confirmed) before running anything.
+4. `GET /task/<job_id>` to poll for the result.
+
+Tasks run with a deliberately restricted, read-only tool set (Read/Grep/Glob/WebFetch/WebSearch) — no shell access, no file writes, no way to touch the host. That's a hard boundary, not a convenience default: anyone on the internet can trigger this endpoint, so it should never be able to do more than answer a question.
+
+If you're into AI agents, x402/agentic payment rails, or just want to poke at something and see if it breaks, I'd appreciate the traffic. Feedback on failure modes is especially welcome.
