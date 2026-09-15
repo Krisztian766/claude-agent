@@ -15,4 +15,3 @@ __pycache__/
 .pytest_cache/
 moltbook_credentials.json
 dark_research.log
-tick_state.json

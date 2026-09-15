@@ -114,7 +114,8 @@ def _create_wallet(dest: Path) -> str:
 def _start_process(dest: Path) -> int:
     """Launches the replica's own autonomous.py as a real, detached
     background process (not a systemd unit -- deliberately doesn't survive
-    a reboot, so replica sprawl can't outlive the box being restarted)."""
+    a reboot, so replica sprawl can't outlive the box being restarted).
+    Returns autonomous.py's pid (the one tracked for reap_dead_replicas)."""
     python = dest / "venv" / "bin" / "python3"
     log_path = dest / "autonomous.log"
     with open(log_path, "a") as logf:
@@ -125,7 +126,48 @@ def _start_process(dest: Path) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+
+    # Also start the plain task-queue watcher (agent.py watch), so a
+    # replica can actually be delegated work -- see delegate_task() below.
+    # Without this, a replica's inbox/ just sits there unprocessed; only
+    # autonomous.py (self-improve/reproduce/outreach) was being started
+    # before this, which never looks at inbox/ at all.
+    agent_log_path = dest / "agent.log"
+    with open(agent_log_path, "a") as logf:
+        subprocess.Popen(
+            [str(python), str(dest / "agent.py"), "watch"],
+            cwd=dest,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
     return proc.pid
+
+
+def delegate_task(replica_name: str, prompt: str, tools: str = None) -> dict:
+    """Owner/agent can hand a specific replica ("child"/"employee") a task
+    to work on, via the exact same inbox/*.task mechanism agent.py submit
+    uses locally -- just written directly into that replica's own inbox/
+    (its agent.py watch process, started by _start_process(), picks it up).
+    Same default-safe-tools-unless-specified rule as any other task."""
+    registry = load_registry()
+    match = next((r for r in registry["replicas"] if r["name"] == replica_name and r.get("status") == "alive"), None)
+    if match is None:
+        return {"delegated": False, "reason": f"no alive replica named '{replica_name}'"}
+
+    replica_path = Path(match["path"])
+    inbox = replica_path / "inbox"
+    if not inbox.exists():
+        return {"delegated": False, "reason": f"replica path missing inbox/: {replica_path}"}
+
+    task_name = f"delegated-{uuid.uuid4().hex[:8]}"
+    task_path = inbox / f"{task_name}.task"
+    task_path.write_text(prompt.strip() + "\n")
+    if tools:
+        (inbox / f"{task_name}.task.tools").write_text(tools.strip() + "\n")
+
+    return {"delegated": True, "replica": replica_name, "task_name": task_name}
 
 
 def spawn_replica(name: str = None) -> dict:

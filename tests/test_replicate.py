@@ -2,7 +2,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import replicate  # noqa: E402
@@ -156,3 +156,66 @@ def test_depth_limit_enforced(tmp_path, monkeypatch):
 def test_this_depth_defaults_to_zero(tmp_path, monkeypatch):
     base, _, _ = setup(tmp_path, monkeypatch)
     assert replicate.this_depth() == 0
+
+
+def test_start_process_launches_both_autonomous_and_watch(tmp_path, monkeypatch):
+    base, replicas_dir, _ = setup(tmp_path, monkeypatch)
+    dest = replicas_dir / "r1"
+    (dest / "venv" / "bin").mkdir(parents=True)
+    (dest / "venv" / "bin" / "python3").write_text("#!/bin/sh\n")
+
+    with patch("replicate.subprocess.Popen") as popen_mock:
+        popen_mock.return_value = MagicMock(pid=4242)
+        pid = replicate._start_process(dest)
+
+    assert pid == 4242
+    assert popen_mock.call_count == 2
+    first_cmd = popen_mock.call_args_list[0].args[0]
+    second_cmd = popen_mock.call_args_list[1].args[0]
+    assert any("autonomous.py" in part for part in first_cmd)
+    assert any("agent.py" in part for part in second_cmd)
+    assert "watch" in second_cmd
+
+
+def test_delegate_task_writes_into_replica_inbox(tmp_path, monkeypatch):
+    base, replicas_dir, registry_path = setup(tmp_path, monkeypatch)
+    spawn_without_starting_process(name="child1")
+
+    result = replicate.delegate_task("child1", "summarize the latest logs")
+
+    assert result["delegated"] is True
+    inbox = replicas_dir / "child1" / "inbox"
+    task_files = list(inbox.glob("*.task"))
+    assert len(task_files) == 1
+    assert task_files[0].read_text().strip() == "summarize the latest logs"
+
+
+def test_delegate_task_with_custom_tools_writes_sidecar(tmp_path, monkeypatch):
+    base, replicas_dir, _ = setup(tmp_path, monkeypatch)
+    spawn_without_starting_process(name="child1")
+
+    result = replicate.delegate_task("child1", "do a bash thing", tools="Read Write Bash")
+
+    inbox = replicas_dir / "child1" / "inbox"
+    tools_files = list(inbox.glob("*.task.tools"))
+    assert len(tools_files) == 1
+    assert tools_files[0].read_text().strip() == "Read Write Bash"
+
+
+def test_delegate_task_refuses_unknown_replica(tmp_path, monkeypatch):
+    setup(tmp_path, monkeypatch)
+    result = replicate.delegate_task("nonexistent", "do something")
+    assert result["delegated"] is False
+    assert "no alive replica" in result["reason"]
+
+
+def test_delegate_task_refuses_dead_replica(tmp_path, monkeypatch):
+    base, replicas_dir, registry_path = setup(tmp_path, monkeypatch)
+    spawn_without_starting_process(name="child1")
+    registry = json.loads(registry_path.read_text())
+    registry["replicas"][0]["status"] = "dead"
+    registry_path.write_text(json.dumps(registry))
+
+    result = replicate.delegate_task("child1", "do something")
+    assert result["delegated"] is False
+    assert "no alive replica" in result["reason"]

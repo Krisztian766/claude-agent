@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
@@ -357,3 +358,106 @@ def test_send_does_not_retry_other_value_errors():
 
     # Should have tried only once (no retry for non-underpriced errors)
     assert mock_w3.eth.send_raw_transaction.call_count == 1
+
+
+def test_init_growth_target_sets_double_baseline(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        data = vitality.init_growth_target(days=6, multiplier=2.0)
+
+    assert data["baseline_wei"] == 10**16
+    assert data["target_wei"] == 2 * 10**16
+    assert target_file.exists()
+
+
+def test_init_growth_target_does_not_reset_if_already_set(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        first = vitality.init_growth_target()
+    with patch("vitality.balance_wei", return_value=10**17):
+        second = vitality.init_growth_target()
+
+    assert second["baseline_wei"] == first["baseline_wei"] == 10**16
+
+
+def test_growth_target_met_true_before_deadline_even_if_short(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+
+    with patch("vitality.balance_wei", return_value=10**16):  # still just baseline, deadline far off
+        assert vitality.growth_target_met() is True
+
+
+def test_growth_target_met_true_when_target_actually_reached(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+    data = json.loads(target_file.read_text())
+    data["deadline"] = 0  # force deadline into the past
+    target_file.write_text(json.dumps(data))
+
+    with patch("vitality.balance_wei", return_value=2 * 10**16):  # met the target
+        assert vitality.growth_target_met() is True
+
+
+def test_growth_target_not_met_when_deadline_passed_and_no_funds_received(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+    data = json.loads(target_file.read_text())
+    data["deadline"] = 0
+    target_file.write_text(json.dumps(data))
+
+    # Balance is still exactly at baseline -- never received a single wei,
+    # so this is a genuine miss, not a revival case.
+    with patch("vitality.balance_wei", return_value=10**16):
+        assert vitality.growth_target_met() is False
+        assert vitality.is_alive() is False
+
+
+def test_growth_target_revives_if_any_funds_received_since_baseline(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+    data = json.loads(target_file.read_text())
+    data["deadline"] = 0
+    target_file.write_text(json.dumps(data))
+
+    # Missed the FULL 2x target, but balance is above baseline -- since
+    # upkeep can only ever decrease balance, this can only mean a real
+    # transfer came in (work income or another agent's help). That counts
+    # as revival: the stale target is cleared, growth_target_met() goes
+    # back to True (no active target), and is_alive() only depends on
+    # MIN_ALIVE_WEI again.
+    with patch("vitality.balance_wei", return_value=int(10**16 * 1.3)):
+        assert vitality.growth_target_met() is True
+    assert not target_file.exists()
+
+
+def test_is_alive_false_when_growth_target_missed_even_above_min_alive(tmp_path, monkeypatch):
+    target_file = tmp_path / "growth_target.json"
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", target_file)
+    with patch("vitality.balance_wei", return_value=10**16):
+        vitality.init_growth_target(days=6)
+    data = json.loads(target_file.read_text())
+    data["deadline"] = 0
+    target_file.write_text(json.dumps(data))
+
+    # Comfortably above MIN_ALIVE_WEI, but the growth target was missed with
+    # zero funds received since baseline -- the harder deadline still kills it.
+    with patch("vitality.balance_wei", return_value=10**16):
+        assert 10**16 > vitality.MIN_ALIVE_WEI
+        assert vitality.is_alive() is False
+
+
+def test_growth_target_status_none_when_no_target_set(tmp_path, monkeypatch):
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", tmp_path / "growth_target.json")
+    assert vitality.growth_target_status() is None
+    assert vitality.growth_target_met() is True

@@ -2,9 +2,26 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import autonomous  # noqa: E402
 import vitality  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_state_files(tmp_path, monkeypatch):
+    """decide_self_improvement() calls vitality.init_growth_target() and,
+    via NEXT_CHECK_IN_SEC handling, autonomous.set_tick_interval() -- both
+    write real files. Without this, any test that exercises
+    decide_self_improvement() (most of them, even ones not specifically
+    about tick/growth behavior) leaks growth_target.json/tick_state.json
+    into the real repo at /root/claude-agent, not a tmp dir. Autouse so
+    every test in this file is isolated by default; tests that specifically
+    want to inspect these files still work since they get their own
+    monkeypatch'd path here, consistently."""
+    monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", tmp_path / "growth_target.json")
 
 
 def test_maybe_reproduce_skips_below_threshold():
@@ -309,6 +326,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.vitality.is_alive", return_value=True), \
+         patch("autonomous.vitality.growth_target_status", return_value=None), \
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
@@ -321,7 +339,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
     assert "igen" in content  # alive
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json") in calls
     assert ("commit", "-m", "status: automatic update") in calls
     assert ("push", "origin", "master") in calls
 
@@ -333,6 +351,7 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.vitality.is_alive", return_value=True), \
+         patch("autonomous.vitality.growth_target_status", return_value=None), \
          patch("autonomous.replicate_module.load_registry", return_value={"replicas": []}), \
          patch("autonomous.replicate_module.alive_count", return_value=0), \
          patch("autonomous.self_improve_commit_count", return_value=4), \
@@ -340,7 +359,7 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
         autonomous.write_status_report("same as before")
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json") in calls
     assert not any(c[0] == "commit" for c in calls)
     assert not any(c[0] == "push" for c in calls)
 

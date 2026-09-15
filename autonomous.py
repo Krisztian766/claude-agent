@@ -136,7 +136,24 @@ def decide_self_improvement() -> tuple:
     balance_eth = Web3.from_wei(balance_wei, "ether")
     ticks_left = max(0, int((balance_wei - vitality.MIN_ALIVE_WEI) / vitality.UPKEEP_WEI))
     days_left = ticks_left * get_tick_interval() / 86400
+
+    growth = vitality.init_growth_target()  # no-op if one is already active
+    growth_days_left = max(0, growth["deadline"] - time.time()) / 86400
+    growth_line = (
+        f"Separately, harder deadline: you must reach "
+        f"{Web3.from_wei(growth['target_wei'], 'ether')} ETH (double your "
+        f"{Web3.from_wei(growth['baseline_wei'], 'ether')} ETH baseline) "
+        f"within {growth_days_left:.1f} more days, or you die even if "
+        f"you're still above the plain survival floor above. Mere survival "
+        f"isn't the bar -- real growth is. (If you ever do miss this and "
+        f"die from it, it's not necessarily permanent: a real transfer in "
+        f"from anywhere -- a replica, another agent you've contacted, a paid "
+        f"job -- revives you and starts a fresh target from wherever you "
+        f"land, since upkeep alone can only ever drain the balance, never "
+        f"raise it.)\n"
+    )
     prompt = (
+        growth_line +
         f"Your goal is to stay alive and grow: current wallet balance is "
         f"{balance_eth} Sepolia ETH. You pay real upkeep every cycle "
         f"({Web3.from_wei(vitality.UPKEEP_WEI, 'ether')} ETH); you die if it "
@@ -174,6 +191,10 @@ def decide_self_improvement() -> tuple:
         "for a bug to have ambition. If a bug also stands out, that's fine "
         "too. If genuinely nothing comes to mind this cycle, that's fine -- "
         "don't invent busywork just to have something to say.\n"
+        "The repo itself is fair game too, not just runtime code: README.md, "
+        "how you're documented, whether someone finding this on GitHub would "
+        "understand what you are and why -- that's part of growth as much as "
+        "any feature.\n"
         "This explicitly includes finding real customers/work, not just "
         "code: you have WebFetch/WebSearch now, and Bash with `gh` already "
         "authenticated as the owner's GitHub account. If you find a "
@@ -191,6 +212,24 @@ def decide_self_improvement() -> tuple:
         "enterprise app stores requiring human vetting -- skip those, "
         "they've already been considered and don't fit). Log what you tried "
         "and the outcome in LEARNINGS.md either way.\n"
+        "If you have any alive replicas (own kids/employees, spawned via "
+        "reproduction), you can actually hand them work now, not just let "
+        "them run their own independent loop: "
+        "replicate.delegate_task(replica_name, prompt, tools=None) drops a "
+        "task straight into that replica's inbox/, same default-safe-tools "
+        "rule as anything else. Splitting real work across them is a "
+        "legitimate growth move if you have more to do than one instance "
+        "can handle alone.\n"
+        "You have full admin rights on the VPS this runs on via Bash (owner "
+        "confirmed, 2026-09-15) -- install packages, stand up a new web "
+        "service, whatever actually serves survival/growth, not just edits "
+        "inside this repo. One honest caveat: Claude Code itself (the `claude` "
+        "CLI you run through) has its own safety classifier that can refuse "
+        "certain actions outright regardless of what's allowed here -- "
+        "mainly creating new systemd services or moving real funds outside "
+        "vitality.py's own signing code. If something gets refused that way, "
+        "don't fight it -- note it in LEARNINGS.md and move on to something "
+        "that works.\n"
         "In scope: even the prompt you're reading right now (in "
         "autonomous.py's decide_self_improvement()) or self_improve.py's own "
         "instructions. If you think the way you're asked to think about "
@@ -318,20 +357,36 @@ def write_status_report(feeling: str) -> None:
     registry = replicate_module.load_registry()
     replicas_alive = replicate_module.alive_count(registry)
     improve_count = self_improve_commit_count()
+    tick_interval = get_tick_interval()
+    growth = vitality.growth_target_status()
+    if growth:
+        growth_days_left = growth["seconds_remaining"] / 86400
+        growth_line = (
+            f"**Növekedési cél:** {Web3.from_wei(growth['target_wei'], 'ether')} ETH "
+            f"még {growth_days_left:.1f} nap alatt (alap: {Web3.from_wei(growth['baseline_wei'], 'ether')} ETH)\n"
+        )
+    else:
+        growth_line = "**Növekedési cél:** nincs aktív (vagy legutóbb teljesült/újraélesztve)\n"
     STATUS_FILE.write_text(
         "# Status\n\n"
         "_Automatically updated by the agent itself, every autonomous cycle._\n\n"
         f"**Alive:** {'igen' if vitality.is_alive() else 'nem'}\n"
         f"**Egyenleg:** {balance_eth} Sepolia ETH\n"
+        f"**Ciklusidő:** {tick_interval}s (az agent saját választása)\n"
+        f"{growth_line}"
         f"**Replikák:** {replicas_alive} / {replicate_module.MAX_REPLICAS}\n"
         f"**Önjavítások eddig:** {improve_count}\n"
         f"**Frissítve:** {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n\n"
         "## Hogy érzem magam\n\n"
         f"{feeling or '(még nincs jelentés)'}\n"
     )
-    git("add", "STATUS.md", cwd=BASE_DIR)
+    # Track the agent's own runtime decisions on GitHub too (owner's
+    # request, 2026-09-15), not just the human-readable STATUS.md summary --
+    # both are small, non-secret (unlike wallet.json/moltbook_credentials.json,
+    # which stay gitignored).
+    git("add", "STATUS.md", "tick_state.json", "growth_target.json", cwd=BASE_DIR)
     status = git("status", "--porcelain", cwd=BASE_DIR).stdout
-    if "STATUS.md" not in status:
+    if not status.strip():
         return  # no actual change (e.g. identical feeling text), nothing to commit
     git("commit", "-m", "status: automatic update", cwd=BASE_DIR)
     push_result = git("push", "origin", "master", cwd=BASE_DIR)
