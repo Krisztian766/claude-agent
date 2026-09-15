@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 import sys
 import threading
 import time
@@ -6,6 +7,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def _acquire_jobs_lock_and_record(hold_time, events, idx):
+    """Run in a separate OS process (see
+    test_jobs_file_lock_excludes_across_separate_processes below): holds
+    _jobs_file_lock() for hold_time seconds and records enter/exit
+    timestamps, so the test can check two real processes -- not just two
+    threads in one process -- never hold the lock at the same time."""
+    import payment_server as ps
+    with ps._jobs_file_lock():
+        events.append((idx, "enter", time.monotonic()))
+        time.sleep(hold_time)
+        events.append((idx, "exit", time.monotonic()))
 
 
 def make_env(tmp_path, monkeypatch):
@@ -248,6 +262,40 @@ def test_activity_reports_replica_and_self_improve_stats(tmp_path, monkeypatch):
     body = resp.get_json()
     assert body["replicas"] == {"alive": 2, "max": 3}
     assert body["self_improve"]["total_commits"] == 5
+
+
+def test_jobs_file_lock_excludes_across_separate_processes(tmp_path, monkeypatch):
+    """Regression test for gunicorn's --workers 2 deployment: the jobs lock
+    must be a real cross-process lock (flock on a file), not a
+    threading.Lock, which would only ever synchronize threads inside a
+    single worker and do nothing across the two independent worker
+    processes gunicorn actually runs."""
+    ps = make_env(tmp_path, monkeypatch)
+    assert ps.JOBS_PATH.parent == tmp_path
+
+    manager = multiprocessing.Manager()
+    events = manager.list()
+
+    p1 = multiprocessing.Process(target=_acquire_jobs_lock_and_record, args=(0.3, events, 1))
+    p2 = multiprocessing.Process(target=_acquire_jobs_lock_and_record, args=(0.3, events, 2))
+    p1.start()
+    p2.start()
+    p1.join(timeout=5)
+    p2.join(timeout=5)
+
+    assert not p1.is_alive() and not p2.is_alive()
+    assert p1.exitcode == 0 and p2.exitcode == 0
+
+    by_idx = {idx: {} for idx in (1, 2)}
+    for idx, kind, t in events:
+        by_idx[idx][kind] = t
+    assert set(by_idx[1]) == {"enter", "exit"}
+    assert set(by_idx[2]) == {"enter", "exit"}
+
+    # The two critical sections must not overlap: whichever process got
+    # the lock second must not enter before the first one exits.
+    overlap = by_idx[1]["enter"] < by_idx[2]["exit"] and by_idx[2]["enter"] < by_idx[1]["exit"]
+    assert not overlap
 
 
 def test_confirm_rejects_expired_job(tmp_path, monkeypatch):

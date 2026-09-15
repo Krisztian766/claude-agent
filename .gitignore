@@ -9,6 +9,7 @@ autonomous.log
 logs/
 wallet.json
 payment_jobs.json
+payment_jobs.json.lock
 __pycache__/
 *.pyc
 .pytest_cache/

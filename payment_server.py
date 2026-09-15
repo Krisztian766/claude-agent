@@ -14,8 +14,11 @@ replicate are not reachable from here either. This server can be paid by
 anyone on the internet; it must never be able to touch the filesystem
 beyond reading, run shell commands, spawn replicas, or edit code.
 """
+import contextlib
+import fcntl
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -50,7 +53,31 @@ app = Flask(__name__)
 web3 = Web3(Web3.HTTPProvider(SEPOLIA_RPC))
 wallet = load_or_create_wallet()
 
-_jobs_lock = threading.Lock()
+
+@contextlib.contextmanager
+def _jobs_file_lock():
+    """Cross-process (and cross-thread) mutual exclusion on payment_jobs.json.
+
+    gunicorn_start.sh runs this app with --workers 2: two independent OS
+    processes, each with its own Python heap. A threading.Lock only
+    synchronizes threads within one process, so it provides zero mutual
+    exclusion between workers -- both can read, modify, and write
+    payment_jobs.json at the same time. flock() locks are held per
+    open-file-description rather than per-process, so two threads in the
+    same process (each opening their own fd here) contend for the lock
+    exactly like two separate processes would -- one primitive that
+    actually covers both cases.
+    """
+    lock_path = JOBS_PATH.with_name(JOBS_PATH.name + ".lock")
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def load_jobs() -> dict:
@@ -76,7 +103,7 @@ def new_job(prompt: str) -> dict:
         "tx_hash": None,
         "result": None,
     }
-    with _jobs_lock:
+    with _jobs_file_lock():
         jobs = load_jobs()
         jobs[job["id"]] = job
         save_jobs(jobs)
@@ -84,12 +111,12 @@ def new_job(prompt: str) -> dict:
 
 
 def get_job(job_id: str) -> dict:
-    with _jobs_lock:
+    with _jobs_file_lock():
         return load_jobs().get(job_id)
 
 
 def update_job(job_id: str, **fields) -> dict:
-    with _jobs_lock:
+    with _jobs_file_lock():
         jobs = load_jobs()
         if job_id not in jobs:
             return None
@@ -113,7 +140,7 @@ def reserve_tx_hash(job_id: str, tx_hash: str) -> tuple:
     rolling back to awaiting_payment if verification later fails -- makes
     the reservation atomic instead.
     """
-    with _jobs_lock:
+    with _jobs_file_lock():
         jobs = load_jobs()
         job = jobs.get(job_id)
         if job is None:
