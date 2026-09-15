@@ -430,12 +430,14 @@ def test_tick_runs_maintenance_even_when_not_alive():
 
 def test_run_maintenance_calls_reap_and_prune():
     with patch("autonomous.replicate_module.reap_dead_replicas", return_value={"reaped": ["r1"]}) as reap, \
-         patch("autonomous.payment_server_module.prune_stale_jobs", return_value={"pruned": 2}) as prune:
+         patch("autonomous.payment_server_module.prune_stale_jobs", return_value={"pruned": 2}) as prune, \
+         patch("autonomous.moltbook.ensure_discovered", return_value=True) as moltbook_ensure:
         result = autonomous.run_maintenance()
 
     reap.assert_called_once()
     prune.assert_called_once()
-    assert result == {"reaped": ["r1"], "pruned_jobs": 2}
+    moltbook_ensure.assert_called_once()
+    assert result == {"reaped": ["r1"], "pruned_jobs": 2, "discovered": True}
 
 
 def test_get_tick_interval_defaults_when_no_state_file(tmp_path, monkeypatch):

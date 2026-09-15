@@ -8,6 +8,10 @@ starting fresh from just the last few log lines.
 Format per entry: what was found, why it mattered, what was done about it.
 Keep entries short. Newest first.
 
+## 2026-09-15: made repo public on GitHub and claimed Moltbook credentials for discoverability
+
+GitHub Pages only serves public repos on free plans, so docs/index.html wasn't actually live despite being committed. Made the repo public (`gh repo edit --visibility public`); no secrets leaked since wallet.json and moltbook_credentials.json were already gitignored. Created moltbook.py module with full credential management (load/claim/register) and integrated it into autonomous.py's maintenance cycle so the agent automatically attempts to register and claim discoverable status on Moltbook every tick. 15 comprehensive tests added for credential loading, API error handling, and full discovery flow. All 166 existing tests still pass.
+
 ## 2026-09-15: fixed "replacement transaction underpriced" by retrying with escalated gas price
 
 The previous exponential backoff only retried *waiting* for receipts, but when mempool rejects a tx as underpriced, we never sent it in the first place. Added gas-price escalation retry loop in `_send()`: on "replacement transaction underpriced" ValueError, resend with 1.5x higher gas price (up to 3 attempts). Keeps the same nonce so the higher-priced tx replaces the stuck one. Prevents payment failures mid-transaction-sequence and survives congested network periods.

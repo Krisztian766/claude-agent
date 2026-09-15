@@ -46,6 +46,7 @@ import outreach as outreach_module
 import payment_server as payment_server_module
 import render_page
 import vitality
+import moltbook
 
 BASE_DIR = Path(__file__).resolve().parent
 LOG_FILE = BASE_DIR / "autonomous.log"
@@ -462,14 +463,20 @@ def run_maintenance() -> dict:
     notices), so alive_count()/the reproduction cap stay accurate; (2) prune
     payment_jobs.json entries that were never paid and are past their own
     expiry, since anyone can POST /task for free with no payment ever
-    required."""
+    required; (3) ensure the agent is claimed and registered on Moltbook for
+    discoverability."""
     reap_result = replicate_module.reap_dead_replicas()
     if reap_result["reaped"]:
         log.info("Halott replikák eltávolítva a nyilvántartásból: %s", reap_result["reaped"])
     prune_result = payment_server_module.prune_stale_jobs()
     if prune_result["pruned"]:
         log.info("Ki nem fizetett, lejárt feladatok törölve: %d", prune_result["pruned"])
-    return {"reaped": reap_result["reaped"], "pruned_jobs": prune_result["pruned"]}
+    discovery_result = moltbook.ensure_discovered()
+    if discovery_result:
+        log.info("Moltbook-on regisztrált és felfedezhetővé tett")
+    else:
+        log.debug("Moltbook regisztráció nem sikerült, következő ciklusban újrapróbálkozunk")
+    return {"reaped": reap_result["reaped"], "pruned_jobs": prune_result["pruned"], "discovered": discovery_result}
 
 
 def tick() -> dict:
