@@ -29,8 +29,17 @@ BASE_DIR = Path(__file__).resolve().parent
 REPLICAS_DIR = Path("/root/claude-agent-replicas")
 REGISTRY_PATH = Path("/root/claude-agent-registry.json")
 
-MAX_REPLICAS = 3       # total simultaneously-registered replicas, hard cap
-MAX_DEPTH = 2           # a replica of a replica of a replica is refused
+# Raised 2026-09-16 (owner's explicit request for more autonomy) from the
+# original 3/2. Real resource cost, not just a number: every replica is a
+# REAL detached process on this ONE VPS (RAM/CPU), running its OWN
+# autonomous.py loop that calls `claude -p` on its own tick -- so raising
+# this multiplies real Anthropic subscription usage, not just headcount.
+# Chosen as a meaningfully higher ceiling, not an unbounded one: still a
+# hard cap, still gated on real demand (REPLICATE_BACKLOG_THRESHOLD in
+# autonomous.py), still enforced globally via REGISTRY_PATH regardless of
+# which instance calls this.
+MAX_REPLICAS = 6        # total simultaneously-registered replicas, hard cap
+MAX_DEPTH = 3            # a replica of a replica of a replica of a replica is refused
 
 # Copied into each replica; venv/ included so it works standalone without
 # re-installing deps. Runtime/instance-specific state is never copied.

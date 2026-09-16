@@ -183,7 +183,12 @@ def test_decide_self_improvement_shows_real_runway_estimate(tmp_path, monkeypatc
     assert f"{expected_days:.1f}" in prompt
 
 
-def test_decide_self_improvement_forbids_tuning_own_economic_constants():
+def test_decide_self_improvement_allows_tuning_own_economic_constants_with_caveats():
+    """2026-09-16: owner explicitly opened up vitality.py's economic
+    constants to self-improve (previously permanently forbidden). The
+    prompt must still mention all four constants, still demand honest
+    LEARNINGS.md justification, and still keep the payment_server.py
+    boundary completely separate and unconditional."""
     captured = {}
 
     def fake_invoke(prompt, tools, model=None):
@@ -198,7 +203,9 @@ def test_decide_self_improvement_forbids_tuning_own_economic_constants():
     prompt = captured["prompt"]
     for constant in ("UPKEEP_WEI", "MIN_ALIVE_WEI", "REPRODUCE_ABOVE_WEI", "INHERITANCE_WEI"):
         assert constant in prompt
-    assert "rigging the game" in prompt
+    assert "in scope" in prompt
+    assert "LEARNINGS.md" in prompt
+    assert "payment_server.py boundary below" in prompt
 
 
 def test_decide_self_improvement_never_reads_payment_jobs():
@@ -383,11 +390,59 @@ def test_maybe_self_improve_skips_when_nothing_decided():
 
 def test_maybe_self_improve_calls_self_improve_when_decided():
     with patch("autonomous.decide_self_improvement", return_value=("do the thing", "cheap")), \
-         patch("autonomous.self_improve.self_improve", return_value={"applied": True, "commit": "abc"}) as si:
+         patch("autonomous.self_improve.self_improve", return_value={"applied": True, "commit": "abc"}) as si, \
+         patch("autonomous._vitality_constants_snapshot", return_value={}):
         result = autonomous.maybe_self_improve()
 
     si.assert_called_once_with("do the thing", model="cheap")
     assert result["applied"] is True
+
+
+def test_maybe_self_improve_flags_vitality_constant_changes():
+    """2026-09-16: since vitality.py's economic constants are now editable
+    by self-improve, any actual change must be loudly flagged for the
+    owner -- this is the one thing that must never happen silently."""
+    before = {"UPKEEP_WEI": "UPKEEP_WEI = Web3.to_wei(0.00005, 'ether')"}
+    after = {"UPKEEP_WEI": "UPKEEP_WEI = Web3.to_wei(0.000001, 'ether')"}
+    with patch("autonomous.decide_self_improvement", return_value=("lower upkeep", "cheap")), \
+         patch("autonomous.self_improve.self_improve", return_value={"applied": True, "commit": "abc123"}), \
+         patch("autonomous._vitality_constants_snapshot", side_effect=[before, after]), \
+         patch("autonomous.log") as mock_log:
+        result = autonomous.maybe_self_improve()
+
+    assert "vitality_constants_changed" in result
+    assert result["vitality_constants_changed"]["UPKEEP_WEI"] == (before["UPKEEP_WEI"], after["UPKEEP_WEI"])
+    assert any("FIGYELEM" in str(call.args[0]) for call in mock_log.warning.call_args_list)
+
+
+def test_maybe_self_improve_no_flag_when_constants_unchanged():
+    snapshot = {"UPKEEP_WEI": "UPKEEP_WEI = Web3.to_wei(0.00005, 'ether')"}
+    with patch("autonomous.decide_self_improvement", return_value=("fix a typo", "cheap")), \
+         patch("autonomous.self_improve.self_improve", return_value={"applied": True, "commit": "abc123"}), \
+         patch("autonomous._vitality_constants_snapshot", return_value=snapshot):
+        result = autonomous.maybe_self_improve()
+
+    assert "vitality_constants_changed" not in result
+
+
+def test_vitality_constants_snapshot_reads_source_not_live_attributes(tmp_path, monkeypatch):
+    """Guards the reason this reads the file instead of vitality.<NAME>:
+    this long-running process never reloads vitality.py after self-improve
+    edits it on disk, so comparing already-imported attributes would
+    silently compare a stale value against itself."""
+    fake_vitality = tmp_path / "vitality.py"
+    fake_vitality.write_text(
+        "UPKEEP_WEI = Web3.to_wei(0.00005, 'ether')\n"
+        "MIN_ALIVE_WEI = Web3.to_wei(0.0005, 'ether')\n"
+        "REPRODUCE_ABOVE_WEI = Web3.to_wei(0.06, 'ether')\n"
+        "INHERITANCE_WEI = Web3.to_wei(0.01, 'ether')\n"
+    )
+    monkeypatch.setattr(autonomous, "BASE_DIR", tmp_path)
+
+    snapshot = autonomous._vitality_constants_snapshot()
+
+    assert snapshot["UPKEEP_WEI"] == "UPKEEP_WEI = Web3.to_wei(0.00005, 'ether')"
+    assert len(snapshot) == 4
 
 
 def test_tick_skips_all_work_when_not_alive():

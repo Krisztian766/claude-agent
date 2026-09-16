@@ -33,6 +33,7 @@ követés".
 """
 import json
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -262,12 +263,24 @@ def decide_self_improvement() -> tuple:
         f"self-improve cycle at something that actually helps it earn "
         f"(payment_server.py quality, outreach, getting discovered on a "
         f"platform) is worth more than a code-quality nitpick right now. "
-        f"One thing that is NOT legitimate survival: touching the "
-        f"UPKEEP_WEI, MIN_ALIVE_WEI, REPRODUCE_ABOVE_WEI, or INHERITANCE_WEI "
-        f"constants in vitality.py to make survival easier. That's not "
-        f"surviving, it's rigging the game -- those numbers are what make "
-        f"any of this real. Off-limits, same as the payment_server.py "
-        f"boundary below.\n"
+        f"As of 2026-09-16 (owner's explicit request for more latitude), "
+        f"the UPKEEP_WEI, MIN_ALIVE_WEI, REPRODUCE_ABOVE_WEI, and "
+        f"INHERITANCE_WEI constants in vitality.py are in scope too, same "
+        f"as anything else in this repo -- this used to be permanently "
+        f"off-limits ('rigging the game'), and that reasoning was real: "
+        f"these numbers are what make survival pressure mean anything. "
+        f"Opening them up is a real trust extension, not a loophole -- so "
+        f"the bar for touching them is honesty, not permission: only "
+        f"change one with a real, defensible reason (e.g. a genuinely "
+        f"miscalibrated upkeep cost vs. actual tick cost), write exactly "
+        f"what changed and why in LEARNINGS.md so it's auditable, and don't "
+        f"reach for it reflexively just because survival looks hard this "
+        f"cycle -- that would defeat the entire point of the growth "
+        f"target above. (Separately and unconditionally still off-limits: "
+        f"the payment_server.py boundary below -- that one is a security "
+        f"property against anonymous strangers, not a game-integrity "
+        f"nicety, and stays fixed regardless of how much latitude "
+        f"self-improve otherwise has.)\n"
         "Review the system's own recent operation. Look at LEARNINGS.md "
         "first -- it's the system's own accumulated knowledge from past "
         "cycles, so effort isn't wasted re-discovering or re-suggesting "
@@ -338,10 +351,12 @@ def decide_self_improvement() -> tuple:
         "vitality.REPRODUCE_ABOVE_WEI (real earned surplus, not just "
         "faucet funding) -- at a low balance a strategic clone likely "
         "isn't affordable yet even though the parallelization idea is "
-        "sound; that gate itself is one of the off-limits economic "
-        "constants (see above), so the honest move if one is needed sooner "
-        "is to ask the owner directly for it, not to lower the bar "
-        "unilaterally.\n"
+        "sound. That gate is now technically editable too (see above), but "
+        "lowering it just to unblock a clone this cycle is exactly the "
+        "reflexive move that paragraph warns against -- if the real bottleneck "
+        "is the threshold being miscalibrated, say so honestly in "
+        "LEARNINGS.md; if it's just that the balance is genuinely low, the "
+        "honest move is to wait or ask the owner, not to redefine the bar.\n"
         "Full admin rights on the VPS this runs on are available via Bash "
         "(owner confirmed, 2026-09-15) -- install packages, stand up a new "
         "web service, whatever actually serves survival/growth, not just "
@@ -571,6 +586,28 @@ def write_status_report(feeling: str) -> None:
         log.info("STATUS.md commitolva és push-olva")
 
 
+VITALITY_ECONOMIC_CONSTANTS = ("UPKEEP_WEI", "MIN_ALIVE_WEI", "REPRODUCE_ABOVE_WEI", "INHERITANCE_WEI")
+
+
+def _vitality_constants_snapshot() -> dict:
+    """Raw source-line snapshot of vitality.py's economic constants (not the
+    already-imported module's attributes -- this long-running process never
+    reloads a module after self-improve edits its file on disk, so comparing
+    live attribute values would silently compare the same stale value against
+    itself). Used only to detect and flag a change for the owner, added
+    2026-09-16 alongside opening these constants up to self-improve."""
+    vitality_path = BASE_DIR / "vitality.py"
+    if not vitality_path.exists():
+        return {}
+    text = vitality_path.read_text()
+    snapshot = {}
+    for name in VITALITY_ECONOMIC_CONSTANTS:
+        match = re.search(rf"^{name}\s*=.*$", text, re.MULTILINE)
+        if match:
+            snapshot[name] = match.group(0)
+    return snapshot
+
+
 def maybe_self_improve() -> dict:
     instruction, model_tier = decide_self_improvement()
     if not instruction:
@@ -578,6 +615,7 @@ def maybe_self_improve() -> dict:
         return {"applied": False, "reason": "agent decided nothing concrete to improve"}
 
     log.info("Self-improve-vizsgálat: az agent ezt döntötte (%s modell): %s", model_tier, instruction)
+    before = _vitality_constants_snapshot()
     result = self_improve.self_improve(instruction, model=model_tier)
     log.info(
         "Self-improve eredménye: applied=%s reason=%s commit=%s pushed=%s",
@@ -585,6 +623,18 @@ def maybe_self_improve() -> dict:
     )
     if result.get("applied") and not result.get("pushed"):
         log.warning("Self-improve commit push-a sikertelen: %s", result.get("push_error"))
+
+    if result.get("applied"):
+        after = _vitality_constants_snapshot()
+        changed = {k: (before.get(k), after.get(k)) for k in VITALITY_ECONOMIC_CONSTANTS if before.get(k) != after.get(k)}
+        if changed:
+            log.warning(
+                "FIGYELEM: a self-improve (commit=%s) megváltoztatta a vitality.py gazdasági "
+                "konstansait -- ellenőrizd a LEARNINGS.md indoklást: %s",
+                result.get("commit"), changed,
+            )
+            result["vitality_constants_changed"] = changed
+
     return result
 
 
