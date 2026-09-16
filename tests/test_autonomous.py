@@ -21,6 +21,7 @@ def isolate_runtime_state_files(tmp_path, monkeypatch):
     want to inspect these files still work since they get their own
     monkeypatch'd path here, consistently."""
     monkeypatch.setattr(autonomous, "TICK_STATE_FILE", tmp_path / "tick_state.json")
+    monkeypatch.setattr(autonomous, "DECISION_STATE_FILE", tmp_path / "decision_state.json")
     monkeypatch.setattr(vitality, "GROWTH_TARGET_FILE", tmp_path / "growth_target.json")
 
 
@@ -63,7 +64,7 @@ def test_maybe_reproduce_does_not_fund_when_spawn_refused():
 def test_decide_self_improvement_returns_empty_on_none():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}):
+         patch("autonomous.invoke_claude", return_value={"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}):
         instruction, _ = autonomous.decide_self_improvement()
         assert instruction == ""
 
@@ -79,7 +80,7 @@ def test_decide_self_improvement_returns_empty_on_error():
 def test_decide_self_improvement_returns_instruction_and_model_tier():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: okay\nDECISION: Fix the flaky retry logic\nMODEL: expensive"}):
+         patch("autonomous.invoke_claude", return_value={"result": "STATUS_NOTE: okay\nDECISION: Fix the flaky retry logic\nMODEL: expensive"}):
         instruction, model_tier = autonomous.decide_self_improvement()
         assert instruction == "Fix the flaky retry logic"
         assert model_tier == "expensive"
@@ -90,7 +91,7 @@ def test_decide_self_improvement_uses_cheap_tier_for_its_own_call():
 
     def fake_invoke(prompt, tools, model=None):
         captured["model"] = model
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -103,7 +104,7 @@ def test_decide_self_improvement_uses_cheap_tier_for_its_own_call():
 def test_decide_self_improvement_passes_feeling_to_status_report():
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report") as wsr, \
-         patch("autonomous.invoke_claude", return_value={"result": "FEELING: doing great, earned two jobs today\nDECISION: NONE\nMODEL: cheap"}):
+         patch("autonomous.invoke_claude", return_value={"result": "STATUS_NOTE: doing great, earned two jobs today\nDECISION: NONE\nMODEL: cheap"}):
         autonomous.decide_self_improvement()
 
     wsr.assert_called_once_with("doing great, earned two jobs today")
@@ -114,7 +115,7 @@ def test_decide_self_improvement_mentions_learnings_file_and_balance():
 
     def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -129,7 +130,7 @@ def test_decide_self_improvement_invites_self_prompt_editing_with_a_boundary():
 
     def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -147,7 +148,7 @@ def test_decide_self_improvement_invites_platform_discovery():
 
     def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -167,7 +168,7 @@ def test_decide_self_improvement_shows_real_runway_estimate(tmp_path, monkeypatc
 
     def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     # balance - MIN_ALIVE_WEI = 999 * UPKEEP_WEI exactly -> 999 ticks left
     balance = vitality.MIN_ALIVE_WEI + 999 * vitality.UPKEEP_WEI
@@ -187,7 +188,7 @@ def test_decide_self_improvement_forbids_tuning_own_economic_constants():
 
     def fake_invoke(prompt, tools, model=None):
         captured["prompt"] = prompt
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -210,7 +211,7 @@ def test_decide_self_improvement_never_reads_payment_jobs():
     # what actually matters is that the code never loads the file's
     # (stranger-controlled) contents to build the prompt.
     def fake_invoke(prompt, tools, model=None):
-        return {"result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap"}
+        return {"result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap"}
 
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
@@ -222,7 +223,7 @@ def test_decide_self_improvement_never_reads_payment_jobs():
 
 
 def test_parse_decision_reply_standard_format():
-    text = "FEELING: I'm doing okay, balance is stable\nDECISION: NONE\nMODEL: cheap"
+    text = "STATUS_NOTE: I'm doing okay, balance is stable\nDECISION: NONE\nMODEL: cheap"
     feeling, decision, model_tier, _ = autonomous._parse_decision_reply(text)
     assert feeling == "I'm doing okay, balance is stable"
     assert decision == "NONE"
@@ -230,7 +231,7 @@ def test_parse_decision_reply_standard_format():
 
 
 def test_parse_decision_reply_with_real_instruction_and_expensive_tier():
-    text = "FEELING: a bit low on funds\nDECISION: Fix the retry bug in payment_server.py\nMODEL: expensive"
+    text = "STATUS_NOTE: a bit low on funds\nDECISION: Fix the retry bug in payment_server.py\nMODEL: expensive"
     feeling, decision, model_tier, _ = autonomous._parse_decision_reply(text)
     assert feeling == "a bit low on funds"
     assert decision == "Fix the retry bug in payment_server.py"
@@ -247,7 +248,7 @@ def test_parse_decision_reply_falls_back_when_unformatted():
 
 
 def test_parse_decision_reply_discards_multiline_refusal():
-    # Seen in practice: instead of following FEELING/DECISION/MODEL, the
+    # Seen in practice: instead of following STATUS_NOTE/DECISION/MODEL, the
     # model replied with a multi-paragraph refusal declining the "you have a
     # wallet/goals" framing entirely. That must NOT be forwarded to
     # self_improve() as an actionable instruction.
@@ -296,7 +297,7 @@ def test_decide_self_improvement_returns_empty_on_unparseable_refusal():
 
 
 def test_parse_decision_reply_ignores_invalid_model_value():
-    text = "FEELING: fine\nDECISION: NONE\nMODEL: super-duper"
+    text = "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: super-duper"
     _, _, model_tier, _ = autonomous._parse_decision_reply(text)
     assert model_tier == "expensive"
 
@@ -344,7 +345,7 @@ def test_write_status_report_creates_readable_file(tmp_path, monkeypatch):
     assert "https://www.moltbook.com/claim/abc" in content
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "decision_state.json", "docs/index.html") in calls
     assert ("commit", "-m", "status: automatic update") in calls
     assert ("push", "origin", "master") in calls
 
@@ -366,7 +367,7 @@ def test_write_status_report_skips_commit_when_nothing_changed(tmp_path, monkeyp
         autonomous.write_status_report("same as before")
 
     calls = [c.args for c in git_mock.call_args_list]
-    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "docs/index.html") in calls
+    assert ("add", "STATUS.md", "tick_state.json", "growth_target.json", "decision_state.json", "docs/index.html") in calls
     assert not any(c[0] == "commit" for c in calls)
     assert not any(c[0] == "push" for c in calls)
 
@@ -413,15 +414,35 @@ def test_tick_does_all_work_when_alive():
          patch("autonomous.vitality.pay_upkeep", return_value={"paid": True}) as upkeep, \
          patch("autonomous.maybe_reproduce", return_value={"reproduced": False}) as mr, \
          patch("autonomous.maybe_self_improve", return_value={"applied": False}) as mi, \
-         patch("autonomous.maybe_draft_outreach", return_value={"drafted": False}) as mo:
+         patch("autonomous.maybe_draft_outreach", return_value={"drafted": False}) as mo, \
+         patch("autonomous.maybe_publish_outreach", return_value={"moltbook": {}, "github": {}}) as mp:
         result = autonomous.tick()
 
     upkeep.assert_called_once()
     mr.assert_called_once()
     mi.assert_called_once()
     mo.assert_called_once()
+    mp.assert_called_once()
     assert result["alive"] is True
     assert "reproduce" in result and "self_improve" in result and "outreach" in result
+
+
+def test_maybe_publish_outreach_calls_both_channels():
+    """Guards against a repeat of the 2026-09-16 incident where an unmocked
+    tick() test call made a REAL network call and posted a real comment to
+    the live, public awesome-agentic-commerce#705 PR. Both channels must
+    always go through outreach_module so tests can mock them -- never
+    inline network/subprocess calls in autonomous.py itself."""
+    with patch("autonomous.outreach_module.publish_to_moltbook", return_value={"posted": False, "reason": "cooldown"}) as pm, \
+         patch("autonomous.outreach_module.publish_github_update", return_value={"posted": False, "reason": "cooldown"}) as pg:
+        result = autonomous.maybe_publish_outreach()
+
+    pm.assert_called_once()
+    pg.assert_called_once()
+    assert result == {
+        "moltbook": {"posted": False, "reason": "cooldown"},
+        "github": {"posted": False, "reason": "cooldown"},
+    }
 
 
 def test_tick_runs_maintenance_even_when_not_alive():
@@ -497,7 +518,7 @@ def test_decide_self_improvement_applies_agent_chosen_tick_interval(tmp_path, mo
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
          patch("autonomous.invoke_claude", return_value={
-             "result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 45"
+             "result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 45"
          }):
         autonomous.decide_self_improvement()
 
@@ -511,7 +532,7 @@ def test_decide_self_improvement_keeps_interval_on_same(tmp_path, monkeypatch):
     with patch("autonomous.vitality.balance_wei", return_value=10**16), \
          patch("autonomous.write_status_report"), \
          patch("autonomous.invoke_claude", return_value={
-             "result": "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
+             "result": "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
          }):
         autonomous.decide_self_improvement()
 
@@ -519,19 +540,19 @@ def test_decide_self_improvement_keeps_interval_on_same(tmp_path, monkeypatch):
 
 
 def test_parse_decision_reply_extracts_next_check_in():
-    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 90"
+    text = "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: 90"
     _, _, _, next_check_in = autonomous._parse_decision_reply(text)
     assert next_check_in == 90
 
 
 def test_parse_decision_reply_same_means_no_change():
-    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
+    text = "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: SAME"
     _, _, _, next_check_in = autonomous._parse_decision_reply(text)
     assert next_check_in is None
 
 
 def test_parse_decision_reply_unparsable_next_check_in_means_no_change():
-    text = "FEELING: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: soon-ish"
+    text = "STATUS_NOTE: fine\nDECISION: NONE\nMODEL: cheap\nNEXT_CHECK_IN_SEC: soon-ish"
     _, _, _, next_check_in = autonomous._parse_decision_reply(text)
     assert next_check_in is None
 

@@ -144,3 +144,93 @@ class TestEnsureDiscovered:
         result = moltbook.ensure_discovered()
 
         assert result == {"discovered": False, "status": "unknown"}
+
+
+class TestCreatePost:
+    @mock.patch('moltbook.requests.post')
+    def test_posts_without_verification_challenge(self, mock_post, temp_creds_file):
+        mock_response = mock.Mock()
+        mock_response.status_code = 201
+        mock_response.json.return_value = {"id": "post123", "verification_required": False}
+        mock_post.return_value = mock_response
+
+        result = moltbook.create_post("Title", "Body text")
+
+        assert result == {"posted": True, "post_id": "post123", "raw": mock_response.json.return_value}
+        call_args = mock_post.call_args
+        assert call_args[0][0].endswith("/posts")
+        assert call_args[1]["json"] == {
+            "submolt_name": "general", "title": "Title", "content": "Body text", "type": "text",
+        }
+        assert call_args[1]["headers"]["Authorization"] == "Bearer moltbook_sk_test123"
+
+    def test_no_credentials_short_circuits(self, missing_creds_file):
+        result = moltbook.create_post("Title", "Body")
+        assert result == {"posted": False, "reason": "no credentials"}
+
+    @mock.patch('moltbook.requests.post')
+    def test_http_error_reported(self, mock_post, temp_creds_file):
+        mock_response = mock.Mock()
+        mock_response.status_code = 429
+        mock_response.text = "rate limited"
+        mock_post.return_value = mock_response
+
+        result = moltbook.create_post("Title", "Body")
+
+        assert result["posted"] is False
+        assert "429" in result["reason"]
+
+    @mock.patch('moltbook.requests.post')
+    @mock.patch('moltbook._submit_verification', return_value=True)
+    @mock.patch('moltbook._solve_challenge', return_value="7.00")
+    def test_verification_challenge_solved_and_post_succeeds(self, mock_solve, mock_submit, mock_post, temp_creds_file):
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "id": "post456",
+            "verification_required": True,
+            "verification": {"verification_code": "vc1", "challenge_text": "what is 3+4?"},
+        }
+        mock_post.return_value = mock_response
+
+        result = moltbook.create_post("Title", "Body")
+
+        assert result["posted"] is True
+        mock_solve.assert_called_once_with("what is 3+4?")
+        mock_submit.assert_called_once_with("moltbook_sk_test123", "vc1", "7.00")
+
+    @mock.patch('moltbook.requests.post')
+    @mock.patch('moltbook._submit_verification', return_value=False)
+    @mock.patch('moltbook._solve_challenge', return_value="7.00")
+    def test_verification_rejected_reports_failure(self, mock_solve, mock_submit, mock_post, temp_creds_file):
+        mock_response = mock.Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "verification_required": True,
+            "verification": {"verification_code": "vc1", "challenge_text": "what is 3+4?"},
+        }
+        mock_post.return_value = mock_response
+
+        result = moltbook.create_post("Title", "Body")
+
+        assert result == {"posted": False, "reason": "verification answer rejected"}
+
+    @mock.patch('moltbook.requests.post')
+    def test_network_error_reported(self, mock_post, temp_creds_file):
+        mock_post.side_effect = requests.RequestException("timeout")
+
+        result = moltbook.create_post("Title", "Body")
+
+        assert result == {"posted": False, "reason": "timeout"}
+
+
+class TestSolveChallenge:
+    @mock.patch('moltbook.invoke_claude')
+    def test_returns_stripped_result(self, mock_invoke):
+        mock_invoke.return_value = {"result": "  7.00  "}
+        assert moltbook._solve_challenge("3+4") == "7.00"
+
+    @mock.patch('moltbook.invoke_claude')
+    def test_returns_empty_on_error(self, mock_invoke):
+        mock_invoke.return_value = {"error": "boom"}
+        assert moltbook._solve_challenge("3+4") == ""
